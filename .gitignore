@@ -1,0 +1,8 @@
+.venv
+logs/*
+.git
+config.json
+
+.DS_Store
+**/__pycache__/
+

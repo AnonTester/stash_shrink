@@ -1,0 +1,534 @@
+class StashShrinkApp {
+    constructor() {
+        this.currentResults = [];
+        this.selectedScenes = new Set();
+        this.currentPage = 1;
+        this.pageSize = 50;
+        this.sortField = null;
+        this.sortDirection = 'asc';
+        this.eventSource = null;
+        
+        this.initializeTheme();
+        this.initializeEventListeners();
+        this.loadConfig();
+        this.checkFirstTimeSetup();
+    }
+
+    initializeTheme() {
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+        
+        // Listen for theme changes
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+            document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+        });
+    }
+
+    initializeEventListeners() {
+        // Settings modal
+        document.getElementById('settings-btn').addEventListener('click', () => this.showSettingsModal());
+        document.querySelector('#settings-modal .close').addEventListener('click', () => this.hideSettingsModal());
+        
+        // Search form
+        document.getElementById('search-form').addEventListener('submit', (e) => this.handleSearch(e));
+        
+        // Selection controls
+        document.getElementById('select-all').addEventListener('click', () => this.selectAll());
+        document.getElementById('select-none').addEventListener('click', () => this.selectNone());
+        document.getElementById('select-invert').addEventListener('click', () => this.selectInvert());
+        document.getElementById('select-all-checkbox').addEventListener('change', (e) => {
+            if (e.target.checked) this.selectAll();
+            else this.selectNone();
+        });
+        
+        // Conversion
+        document.getElementById('convert-videos').addEventListener('click', () => this.queueConversion());
+        document.getElementById('cancel-all').addEventListener('click', () => this.cancelAllConversions());
+        document.getElementById('clear-completed').addEventListener('click', () => this.clearCompleted());
+        
+        // Pagination
+        document.getElementById('page-size').addEventListener('change', (e) => {
+            this.pageSize = e.target.value === 'all' ? Infinity : parseInt(e.target.value);
+            this.renderResults();
+        });
+        document.getElementById('prev-page').addEventListener('click', () => this.previousPage());
+        document.getElementById('next-page').addEventListener('click', () => this.nextPage());
+        
+        // Table sorting
+        document.querySelectorAll('#results-table th[data-sort]').forEach(th => {
+            th.addEventListener('click', () => this.handleSort(th.dataset.sort));
+        });
+        
+        // Close modals when clicking outside
+        window.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                this.hideSettingsModal();
+                this.hideLogModal();
+            }
+        });
+    }
+
+    async loadConfig() {
+        try {
+            const response = await fetch('/api/config');
+            const config = await response.json();
+            this.config = config;
+        } catch (error) {
+            console.error('Failed to load config:', error);
+        }
+    }
+
+    checkFirstTimeSetup() {
+        if (this.config.stash_url === 'http://localhost:9999' && !this.config.api_key) {
+            this.showSettingsModal();
+        }
+    }
+
+    showSettingsModal() {
+        const modal = document.getElementById('settings-modal');
+        this.populateSettingsForm();
+        modal.style.display = 'block';
+    }
+
+    hideSettingsModal() {
+        document.getElementById('settings-modal').style.display = 'none';
+    }
+
+    populateSettingsForm() {
+        if (!this.config) return;
+        
+        const form = document.getElementById('settings-form');
+        form.stash_url.value = this.config.stash_url || '';
+        form.api_key.value = this.config.api_key || '';
+        form.default_search_limit.value = this.config.default_search_limit || 50;
+        form.max_concurrent_tasks.value = this.config.max_concurrent_tasks || 2;
+        
+        const videoSettings = this.config.video_settings || {};
+        form.width.value = videoSettings.width || '';
+        form.height.value = videoSettings.height || '';
+        form.bitrate.value = videoSettings.bitrate || '';
+        form.framerate.value = videoSettings.framerate || '';
+        form.buffer_size.value = videoSettings.buffer_size || '';
+        form.container.value = videoSettings.container || '';
+    }
+
+    async saveSettings(formData) {
+        try {
+            const settings = {
+                stash_url: formData.get('stash_url'),
+                api_key: formData.get('api_key'),
+                default_search_limit: parseInt(formData.get('default_search_limit')),
+                max_concurrent_tasks: parseInt(formData.get('max_concurrent_tasks')),
+                video_settings: {
+                    width: parseInt(formData.get('width')),
+                    height: parseInt(formData.get('height')),
+                    bitrate: formData.get('bitrate'),
+                    framerate: parseFloat(formData.get('framerate')),
+                    buffer_size: formData.get('buffer_size'),
+                    container: formData.get('container')
+                }
+            };
+            
+            const response = await fetch('/api/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(settings)
+            });
+            
+            if (response.ok) {
+                this.config = settings;
+                this.hideSettingsModal();
+                alert('Settings saved successfully!');
+            } else {
+                throw new Error('Failed to save settings');
+            }
+        } catch (error) {
+            console.error('Error saving settings:', error);
+            alert('Error saving settings: ' + error.message);
+        }
+    }
+
+    async handleSearch(e) {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        
+        try {
+            const searchParams = {};
+            for (let [key, value] of formData.entries()) {
+                if (value) searchParams[key] = value;
+            }
+            
+            const response = await fetch('/api/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(searchParams)
+            });
+            
+            const data = await response.json();
+            this.currentResults = data.scenes;
+            this.currentPage = 1;
+            this.selectedScenes.clear();
+            this.renderResults();
+            document.querySelector('.results-section').style.display = 'block';
+        } catch (error) {
+            console.error('Search failed:', error);
+            alert('Search failed: ' + error.message);
+        }
+    }
+
+    renderResults() {
+        const tbody = document.querySelector('#results-table tbody');
+        tbody.innerHTML = '';
+        
+        // Sort results
+        if (this.sortField) {
+            this.currentResults.sort((a, b) => {
+                let aVal = this.getSortValue(a, this.sortField);
+                let bVal = this.getSortValue(b, this.sortField);
+                
+                if (this.sortDirection === 'asc') {
+                    return aVal > bVal ? 1 : -1;
+                } else {
+                    return aVal < bVal ? 1 : -1;
+                }
+            });
+        }
+        
+        // Paginate
+        const startIndex = (this.currentPage - 1) * this.pageSize;
+        const endIndex = Math.min(startIndex + this.pageSize, this.currentResults.length);
+        const pageResults = this.currentResults.slice(startIndex, endIndex);
+        
+        pageResults.forEach(scene => {
+            const row = document.createElement('tr');
+            const isSelected = this.selectedScenes.has(scene.id);
+            
+            row.innerHTML = `
+                <td><input type="checkbox" class="scene-checkbox" value="${scene.id}" ${isSelected ? 'checked' : ''}></td>
+                <td><a href="${this.config.stash_url}/scenes/${scene.id}" target="_blank">${scene.title || 'Untitled'}</a></td>
+                <td>${this.formatDuration(scene.file.duration)}</td>
+                <td>${this.formatFileSize(scene.file.size)}</td>
+                <td>${scene.file.video_codec}</td>
+                <td>${scene.file.width}</td>
+                <td>${scene.file.height}</td>
+                <td>${this.formatBitrate(scene.file.bit_rate)}</td>
+                <td>${scene.file.frame_rate}</td>
+                <td title="${scene.path}">${this.truncatePath(scene.path)}</td>
+            `;
+            
+            row.querySelector('.scene-checkbox').addEventListener('change', (e) => {
+                this.toggleSceneSelection(scene.id, e.target.checked);
+            });
+            
+            tbody.appendChild(row);
+        });
+        
+        this.updatePagination();
+        this.updateSelectionControls();
+    }
+
+    getSortValue(scene, field) {
+        switch (field) {
+            case 'title': return scene.title || '';
+            case 'duration': return scene.file.duration;
+            case 'size': return scene.file.size;
+            case 'codec': return scene.file.video_codec;
+            case 'width': return scene.file.width;
+            case 'height': return scene.file.height;
+            case 'bitrate': return scene.file.bit_rate;
+            case 'framerate': return scene.file.frame_rate;
+            default: return '';
+        }
+    }
+
+    handleSort(field) {
+        if (this.sortField === field) {
+            this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            this.sortField = field;
+            this.sortDirection = 'asc';
+        }
+        
+        // Update table headers
+        document.querySelectorAll('#results-table th[data-sort]').forEach(th => {
+            th.removeAttribute('data-sort-direction');
+        });
+        document.querySelector(`#results-table th[data-sort="${field}"]`).setAttribute('data-sort', this.sortDirection);
+        
+        this.renderResults();
+    }
+
+    toggleSceneSelection(sceneId, selected) {
+        if (selected) {
+            this.selectedScenes.add(sceneId);
+        } else {
+            this.selectedScenes.delete(sceneId);
+        }
+        this.updateSelectionControls();
+    }
+
+    selectAll() {
+        const currentPageScenes = this.getCurrentPageSceneIds();
+        currentPageScenes.forEach(id => this.selectedScenes.add(id));
+        this.renderResults();
+    }
+
+    selectNone() {
+        const currentPageScenes = this.getCurrentPageSceneIds();
+        currentPageScenes.forEach(id => this.selectedScenes.delete(id));
+        this.renderResults();
+    }
+
+    selectInvert() {
+        const currentPageScenes = this.getCurrentPageSceneIds();
+        currentPageScenes.forEach(id => {
+            if (this.selectedScenes.has(id)) {
+                this.selectedScenes.delete(id);
+            } else {
+                this.selectedScenes.add(id);
+            }
+        });
+        this.renderResults();
+    }
+
+    getCurrentPageSceneIds() {
+        const startIndex = (this.currentPage - 1) * this.pageSize;
+        const endIndex = Math.min(startIndex + this.pageSize, this.currentResults.length);
+        return this.currentResults.slice(startIndex, endIndex).map(scene => scene.id);
+    }
+
+    updateSelectionControls() {
+        const currentPageScenes = this.getCurrentPageSceneIds();
+        const selectedCount = currentPageScenes.filter(id => this.selectedScenes.has(id)).length;
+        const allSelected = selectedCount === currentPageScenes.length;
+        
+        document.getElementById('select-all-checkbox').checked = allSelected;
+        document.getElementById('select-all-checkbox').indeterminate = selectedCount > 0 && !allSelected;
+    }
+
+    updatePagination() {
+        const totalPages = Math.ceil(this.currentResults.length / this.pageSize);
+        document.getElementById('page-info').textContent = `Page ${this.currentPage} of ${totalPages}`;
+        document.getElementById('prev-page').disabled = this.currentPage === 1;
+        document.getElementById('next-page').disabled = this.currentPage === totalPages;
+    }
+
+    previousPage() {
+        if (this.currentPage > 1) {
+            this.currentPage--;
+            this.renderResults();
+        }
+    }
+
+    nextPage() {
+        const totalPages = Math.ceil(this.currentResults.length / this.pageSize);
+        if (this.currentPage < totalPages) {
+            this.currentPage++;
+            this.renderResults();
+        }
+    }
+
+    async queueConversion() {
+        if (this.selectedScenes.size === 0) {
+            alert('Please select at least one scene to convert.');
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/queue-conversion', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(Array.from(this.selectedScenes))
+            });
+            
+            if (response.ok) {
+                this.showConversionSection();
+                this.startSSE();
+                alert(`Queued ${this.selectedScenes.size} scenes for conversion.`);
+            } else {
+                throw new Error('Failed to queue conversion');
+            }
+        } catch (error) {
+            console.error('Conversion queue failed:', error);
+            alert('Failed to queue conversion: ' + error.message);
+        }
+    }
+
+    showConversionSection() {
+        document.querySelector('.results-section').style.display = 'none';
+        document.querySelector('.conversion-section').style.display = 'block';
+    }
+
+    startSSE() {
+        if (this.eventSource) {
+            this.eventSource.close();
+        }
+        
+        this.eventSource = new EventSource('/sse');
+        this.eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            this.updateConversionStatus(data);
+        };
+        
+        this.eventSource.onerror = (error) => {
+            console.error('SSE error:', error);
+            // Attempt to reconnect after 5 seconds
+            setTimeout(() => this.startSSE(), 5000);
+        };
+    }
+
+    updateConversionStatus(statusData) {
+        this.renderConversionTable(statusData.queue);
+        this.updateProgressOverview(statusData.queue);
+    }
+
+    renderConversionTable(queue) {
+        const tbody = document.querySelector('#conversion-table tbody');
+        tbody.innerHTML = '';
+        
+        queue.forEach(task => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${task.scene.title || 'Untitled'}</td>
+                <td class="status-${task.status}">${task.status}</td>
+                <td>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${task.progress}%"></div>
+                    </div>
+                    ${task.progress.toFixed(1)}%
+                </td>
+                <td>
+                    ${task.status === 'error' ? 
+                        `<button class="btn btn-secondary" onclick="app.showLog('${task.task_id}')">View Log</button>
+                         <button class="btn btn-primary" onclick="app.retryConversion('${task.task_id}')">Retry</button>` : 
+                        ''}
+                    ${task.status === 'pending' || task.status === 'processing' ? 
+                        `<button class="btn btn-danger" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` : 
+                        ''}
+                    ${task.status === 'completed' ? 
+                        `<button class="btn btn-secondary" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` : 
+                        ''}
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+
+    updateProgressOverview(queue) {
+        const total = queue.length;
+        const completed = queue.filter(task => task.status === 'completed').length;
+        const processing = queue.filter(task => task.status === 'processing').length;
+        const progress = total > 0 ? (completed / total) * 100 : 0;
+        
+        document.getElementById('overall-progress').style.width = `${progress}%`;
+        document.getElementById('progress-text').textContent = `${progress.toFixed(1)}% Complete`;
+        
+        // Simple ETA calculation (would need more sophisticated logic in reality)
+        if (processing > 0) {
+            const remaining = total - completed;
+            const estimatedTime = remaining * 2; // Placeholder
+            document.getElementById('eta-text').textContent = `ETA: ${this.formatTime(estimatedTime)}`;
+        }
+    }
+
+    async cancelConversion(taskId) {
+        try {
+            await fetch(`/api/cancel-conversion/${taskId}`, { method: 'POST' });
+        } catch (error) {
+            console.error('Failed to cancel conversion:', error);
+        }
+    }
+
+    async cancelAllConversions() {
+        if (confirm('Are you sure you want to cancel all conversions?')) {
+            // This would need to be implemented in the backend
+            alert('Cancel all functionality to be implemented');
+        }
+    }
+
+    async clearCompleted() {
+        try {
+            await fetch('/api/clear-completed', { method: 'POST' });
+        } catch (error) {
+            console.error('Failed to clear completed:', error);
+        }
+    }
+
+    async showLog(taskId) {
+        // This would need to fetch the actual log content
+        const logContent = "Log content would be displayed here...";
+        document.getElementById('log-content').textContent = logContent;
+        document.getElementById('log-modal').style.display = 'block';
+    }
+
+    hideLogModal() {
+        document.getElementById('log-modal').style.display = 'none';
+    }
+
+    async retryConversion(taskId) {
+        // Implementation would depend on backend API
+        alert('Retry functionality to be implemented');
+    }
+
+    async removeFromQueue(taskId) {
+        // Implementation would depend on backend API
+        alert('Remove from queue functionality to be implemented');
+    }
+
+    // Utility functions
+    formatDuration(seconds) {
+        if (!seconds) return '0:00';
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    formatFileSize(bytes) {
+        if (!bytes) return '0 B';
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    formatBitrate(bps) {
+        if (!bps) return '0 bps';
+        const sizes = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+        const i = Math.floor(Math.log(bps) / Math.log(1000));
+        return Math.round(bps / Math.pow(1000, i) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    formatTime(seconds) {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        return `${hours}h ${minutes}m`;
+    }
+
+    truncatePath(path, maxLength = 50) {
+        if (path.length <= maxLength) return path;
+        return '...' + path.slice(-maxLength + 3);
+    }
+}
+
+// Settings form handling
+document.getElementById('settings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    await app.saveSettings(formData);
+});
+
+// Log modal close
+document.querySelector('#log-modal .close').addEventListener('click', () => {
+    app.hideLogModal();
+});
+
+// Initialize app when DOM is loaded
+let app;
+document.addEventListener('DOMContentLoaded', () => {
+    app = new StashShrinkApp();
+});
