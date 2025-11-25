@@ -51,7 +51,7 @@
             </div>
             <button id="convert-videos" class="btn btn-primary">Convert Selected Videos</button>
         </div>
-        
+
         <div class="table-container">
             <table id="results-table" class="data-table">
                 <thead>
@@ -71,7 +71,7 @@
                 <tbody></tbody>
             </table>
         </div>
-        
+
         <div class="pagination-controls">
             <select id="page-size">
                 <option value="50">50</option>
@@ -96,7 +96,7 @@
             <button id="cancel-all" class="btn btn-danger">Cancel All</button>
             <button id="clear-completed" class="btn btn-secondary">Clear Completed</button>
         </div>
-        
+
         <div class="progress-overview">
             <div class="progress-bar">
                 <div id="overall-progress" class="progress-fill"></div>
@@ -104,7 +104,7 @@
             <div id="progress-text">0% Complete</div>
             <div id="eta-text">ETA: Calculating...</div>
         </div>
-        
+
         <div class="table-container">
             <table id="conversion-table" class="data-table">
                 <thead>
@@ -133,4 +133,18 @@
         </div>
     </div>
 </div>
+
+<script>
+    // Show settings modal on first run
+    document.addEventListener('DOMContentLoaded', function() {
+        const showSettings = document.body.getAttribute('data-show-settings') === 'true';
+        if (showSettings) {
+            setTimeout(() => {
+                if (typeof app !== 'undefined') {
+                    app.showSettingsModal();
+                }
+            }, 500);
+        }
+    });
+</script>
 {% endblock %}

@@ -7,17 +7,26 @@ class StashShrinkApp {
         this.sortField = null;
         this.sortDirection = 'asc';
         this.eventSource = null;
-        
+        this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
+
         this.initializeTheme();
         this.initializeEventListeners();
         this.loadConfig();
-        this.checkFirstTimeSetup();
+        this.handleFirstRun();
+    }
+
+    handleFirstRun() {
+        if (this.isFirstRun) {
+            // Add first-run class to body to dim the background
+            document.body.classList.add('first-run');
+            console.log('First run detected - settings modal should be open');
+        }
     }
 
     initializeTheme() {
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-        
+
         // Listen for theme changes
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
             document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
@@ -25,13 +34,21 @@ class StashShrinkApp {
     }
 
     initializeEventListeners() {
-        // Settings modal
-        document.getElementById('settings-btn').addEventListener('click', () => this.showSettingsModal());
-        document.querySelector('#settings-modal .close').addEventListener('click', () => this.hideSettingsModal());
-        
+        // Settings modal - only if not first run
+        if (!this.isFirstRun) {
+            document.getElementById('settings-btn').addEventListener('click', () => this.showSettingsModal());
+            document.querySelector('#settings-modal .close').addEventListener('click', () => this.hideSettingsModal());
+        }
+
+        // Settings form
+        document.getElementById('settings-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.saveSettings(new FormData(e.target));
+        });
+
         // Search form
         document.getElementById('search-form').addEventListener('submit', (e) => this.handleSearch(e));
-        
+
         // Selection controls
         document.getElementById('select-all').addEventListener('click', () => this.selectAll());
         document.getElementById('select-none').addEventListener('click', () => this.selectNone());
@@ -40,12 +57,12 @@ class StashShrinkApp {
             if (e.target.checked) this.selectAll();
             else this.selectNone();
         });
-        
+
         // Conversion
         document.getElementById('convert-videos').addEventListener('click', () => this.queueConversion());
         document.getElementById('cancel-all').addEventListener('click', () => this.cancelAllConversions());
         document.getElementById('clear-completed').addEventListener('click', () => this.clearCompleted());
-        
+
         // Pagination
         document.getElementById('page-size').addEventListener('change', (e) => {
             this.pageSize = e.target.value === 'all' ? Infinity : parseInt(e.target.value);
@@ -53,17 +70,27 @@ class StashShrinkApp {
         });
         document.getElementById('prev-page').addEventListener('click', () => this.previousPage());
         document.getElementById('next-page').addEventListener('click', () => this.nextPage());
-        
+
         // Table sorting
         document.querySelectorAll('#results-table th[data-sort]').forEach(th => {
             th.addEventListener('click', () => this.handleSort(th.dataset.sort));
         });
-        
-        // Close modals when clicking outside
-        window.addEventListener('click', (e) => {
-            if (e.target.classList.contains('modal')) {
-                this.hideSettingsModal();
-                this.hideLogModal();
+
+        // Close modals when clicking outside (only if not first run)
+        if (!this.isFirstRun) {
+            window.addEventListener('click', (e) => {
+                if (e.target.classList.contains('modal')) {
+                    this.hideSettingsModal();
+                    this.hideLogModal();
+                }
+            });
+        }
+
+        // Prevent Escape key from closing modal during first run
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.isFirstRun) {
+                e.preventDefault();
+                return false;
             }
         });
     }
@@ -78,12 +105,6 @@ class StashShrinkApp {
         }
     }
 
-    checkFirstTimeSetup() {
-        if (this.config.stash_url === 'http://localhost:9999' && !this.config.api_key) {
-            this.showSettingsModal();
-        }
-    }
-
     showSettingsModal() {
         const modal = document.getElementById('settings-modal');
         this.populateSettingsForm();
@@ -91,18 +112,22 @@ class StashShrinkApp {
     }
 
     hideSettingsModal() {
+        // Don't allow hiding during first run
+        if (this.isFirstRun) {
+            return;
+        }
         document.getElementById('settings-modal').style.display = 'none';
     }
 
     populateSettingsForm() {
         if (!this.config) return;
-        
+
         const form = document.getElementById('settings-form');
         form.stash_url.value = this.config.stash_url || '';
         form.api_key.value = this.config.api_key || '';
         form.default_search_limit.value = this.config.default_search_limit || 50;
         form.max_concurrent_tasks.value = this.config.max_concurrent_tasks || 2;
-        
+
         const videoSettings = this.config.video_settings || {};
         form.width.value = videoSettings.width || '';
         form.height.value = videoSettings.height || '';
@@ -114,21 +139,25 @@ class StashShrinkApp {
 
     async saveSettings(formData) {
         try {
+            console.log('Saving settings...');
+
             const settings = {
                 stash_url: formData.get('stash_url'),
                 api_key: formData.get('api_key'),
-                default_search_limit: parseInt(formData.get('default_search_limit')),
-                max_concurrent_tasks: parseInt(formData.get('max_concurrent_tasks')),
+                default_search_limit: parseInt(formData.get('default_search_limit')) || 50,
+                max_concurrent_tasks: parseInt(formData.get('max_concurrent_tasks')) || 2,
                 video_settings: {
-                    width: parseInt(formData.get('width')),
-                    height: parseInt(formData.get('height')),
-                    bitrate: formData.get('bitrate'),
-                    framerate: parseFloat(formData.get('framerate')),
-                    buffer_size: formData.get('buffer_size'),
-                    container: formData.get('container')
+                    width: parseInt(formData.get('width')) || 1280,
+                    height: parseInt(formData.get('height')) || 720,
+                    bitrate: formData.get('bitrate') || '1000k',
+                    framerate: parseFloat(formData.get('framerate')) || 30,
+                    buffer_size: formData.get('buffer_size') || '2000k',
+                    container: formData.get('container') || 'mp4'
                 }
             };
-            
+
+            console.log('Sending settings:', settings);
+
             const response = await fetch('/api/config', {
                 method: 'POST',
                 headers: {
@@ -136,13 +165,27 @@ class StashShrinkApp {
                 },
                 body: JSON.stringify(settings)
             });
-            
+
             if (response.ok) {
                 this.config = settings;
-                this.hideSettingsModal();
-                alert('Settings saved successfully!');
+
+                if (this.isFirstRun) {
+                    // Remove first run state and reload the page
+                    this.isFirstRun = false;
+                    document.body.classList.remove('first-run');
+                    document.getElementById('settings-btn').style.display = 'block';
+                    document.getElementById('settings-modal').classList.remove('first-run');
+                    document.getElementById('settings-modal').style.display = 'none';
+
+                    // Show success message and enable the interface
+                    alert('Configuration saved successfully! You can now use Stash Shrink.');
+                } else {
+                    this.hideSettingsModal();
+                    alert('Settings saved successfully!');
+                }
             } else {
-                throw new Error('Failed to save settings');
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to save settings');
             }
         } catch (error) {
             console.error('Error saving settings:', error);
@@ -152,14 +195,23 @@ class StashShrinkApp {
 
     async handleSearch(e) {
         e.preventDefault();
+
+        // Don't allow search during first run
+        if (this.isFirstRun) {
+            alert('Please complete the first-time setup by saving the configuration.');
+            return;
+        }
+
         const formData = new FormData(e.target);
-        
+
         try {
             const searchParams = {};
             for (let [key, value] of formData.entries()) {
                 if (value) searchParams[key] = value;
             }
-            
+
+            console.log('Searching with params:', searchParams);
+
             const response = await fetch('/api/search', {
                 method: 'POST',
                 headers: {
@@ -167,7 +219,12 @@ class StashShrinkApp {
                 },
                 body: JSON.stringify(searchParams)
             });
-            
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+            }
+
             const data = await response.json();
             this.currentResults = data.scenes;
             this.currentPage = 1;
@@ -183,13 +240,13 @@ class StashShrinkApp {
     renderResults() {
         const tbody = document.querySelector('#results-table tbody');
         tbody.innerHTML = '';
-        
+
         // Sort results
         if (this.sortField) {
             this.currentResults.sort((a, b) => {
                 let aVal = this.getSortValue(a, this.sortField);
                 let bVal = this.getSortValue(b, this.sortField);
-                
+
                 if (this.sortDirection === 'asc') {
                     return aVal > bVal ? 1 : -1;
                 } else {
@@ -197,16 +254,16 @@ class StashShrinkApp {
                 }
             });
         }
-        
+
         // Paginate
         const startIndex = (this.currentPage - 1) * this.pageSize;
         const endIndex = Math.min(startIndex + this.pageSize, this.currentResults.length);
         const pageResults = this.currentResults.slice(startIndex, endIndex);
-        
+
         pageResults.forEach(scene => {
             const row = document.createElement('tr');
             const isSelected = this.selectedScenes.has(scene.id);
-            
+
             row.innerHTML = `
                 <td><input type="checkbox" class="scene-checkbox" value="${scene.id}" ${isSelected ? 'checked' : ''}></td>
                 <td><a href="${this.config.stash_url}/scenes/${scene.id}" target="_blank">${scene.title || 'Untitled'}</a></td>
@@ -219,14 +276,14 @@ class StashShrinkApp {
                 <td>${scene.file.frame_rate}</td>
                 <td title="${scene.path}">${this.truncatePath(scene.path)}</td>
             `;
-            
+
             row.querySelector('.scene-checkbox').addEventListener('change', (e) => {
                 this.toggleSceneSelection(scene.id, e.target.checked);
             });
-            
+
             tbody.appendChild(row);
         });
-        
+
         this.updatePagination();
         this.updateSelectionControls();
     }
@@ -252,13 +309,13 @@ class StashShrinkApp {
             this.sortField = field;
             this.sortDirection = 'asc';
         }
-        
+
         // Update table headers
         document.querySelectorAll('#results-table th[data-sort]').forEach(th => {
             th.removeAttribute('data-sort-direction');
         });
         document.querySelector(`#results-table th[data-sort="${field}"]`).setAttribute('data-sort', this.sortDirection);
-        
+
         this.renderResults();
     }
 
@@ -305,7 +362,7 @@ class StashShrinkApp {
         const currentPageScenes = this.getCurrentPageSceneIds();
         const selectedCount = currentPageScenes.filter(id => this.selectedScenes.has(id)).length;
         const allSelected = selectedCount === currentPageScenes.length;
-        
+
         document.getElementById('select-all-checkbox').checked = allSelected;
         document.getElementById('select-all-checkbox').indeterminate = selectedCount > 0 && !allSelected;
     }
@@ -333,11 +390,17 @@ class StashShrinkApp {
     }
 
     async queueConversion() {
+        // Don't allow conversion during first run
+        if (this.isFirstRun) {
+            alert('Please complete the first-time setup by saving the configuration.');
+            return;
+        }
+
         if (this.selectedScenes.size === 0) {
             alert('Please select at least one scene to convert.');
             return;
         }
-        
+
         try {
             const response = await fetch('/api/queue-conversion', {
                 method: 'POST',
@@ -346,7 +409,7 @@ class StashShrinkApp {
                 },
                 body: JSON.stringify(Array.from(this.selectedScenes))
             });
-            
+
             if (response.ok) {
                 this.showConversionSection();
                 this.startSSE();
@@ -369,13 +432,13 @@ class StashShrinkApp {
         if (this.eventSource) {
             this.eventSource.close();
         }
-        
+
         this.eventSource = new EventSource('/sse');
         this.eventSource.onmessage = (event) => {
             const data = JSON.parse(event.data);
             this.updateConversionStatus(data);
         };
-        
+
         this.eventSource.onerror = (error) => {
             console.error('SSE error:', error);
             // Attempt to reconnect after 5 seconds
@@ -391,7 +454,7 @@ class StashShrinkApp {
     renderConversionTable(queue) {
         const tbody = document.querySelector('#conversion-table tbody');
         tbody.innerHTML = '';
-        
+
         queue.forEach(task => {
             const row = document.createElement('tr');
             row.innerHTML = `
@@ -404,15 +467,15 @@ class StashShrinkApp {
                     ${task.progress.toFixed(1)}%
                 </td>
                 <td>
-                    ${task.status === 'error' ? 
+                    ${task.status === 'error' ?
                         `<button class="btn btn-secondary" onclick="app.showLog('${task.task_id}')">View Log</button>
-                         <button class="btn btn-primary" onclick="app.retryConversion('${task.task_id}')">Retry</button>` : 
+                         <button class="btn btn-primary" onclick="app.retryConversion('${task.task_id}')">Retry</button>` :
                         ''}
-                    ${task.status === 'pending' || task.status === 'processing' ? 
-                        `<button class="btn btn-danger" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` : 
+                    ${task.status === 'pending' || task.status === 'processing' ?
+                        `<button class="btn btn-danger" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` :
                         ''}
-                    ${task.status === 'completed' ? 
-                        `<button class="btn btn-secondary" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` : 
+                    ${task.status === 'completed' ?
+                        `<button class="btn btn-secondary" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` :
                         ''}
                 </td>
             `;
@@ -425,10 +488,10 @@ class StashShrinkApp {
         const completed = queue.filter(task => task.status === 'completed').length;
         const processing = queue.filter(task => task.status === 'processing').length;
         const progress = total > 0 ? (completed / total) * 100 : 0;
-        
+
         document.getElementById('overall-progress').style.width = `${progress}%`;
         document.getElementById('progress-text').textContent = `${progress.toFixed(1)}% Complete`;
-        
+
         // Simple ETA calculation (would need more sophisticated logic in reality)
         if (processing > 0) {
             const remaining = total - completed;
@@ -514,13 +577,6 @@ class StashShrinkApp {
         return '...' + path.slice(-maxLength + 3);
     }
 }
-
-// Settings form handling
-document.getElementById('settings-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const formData = new FormData(e.target);
-    await app.saveSettings(formData);
-});
 
 // Log modal close
 document.querySelector('#log-modal .close').addEventListener('click', () => {

@@ -100,35 +100,67 @@ def save_config(config):
 def get_config():
     config = load_config()
     if config is None:
-        config = DEFAULT_CONFIG
-        save_config(config)
+        # Return default config but don't save it yet
+        return DEFAULT_CONFIG
     return config
+
+def is_first_run():
+    return not os.path.exists(CONFIG_FILE)
 
 async def stash_request(graphql_query: str, variables: dict = None):
     config = get_config()
     headers = {}
     if config.get('api_key'):
         headers['ApiKey'] = config['api_key']
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{config['stash_url']}/graphql",
-            json={"query": graphql_query, "variables": variables},
-            headers=headers
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{config['stash_url']}/graphql",
+                json={"query": graphql_query, "variables": variables},
+                headers=headers
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.ConnectError as e:
+        logger.error(f"Connection error to Stash at {config['stash_url']}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot connect to Stash at {config['stash_url']}. Please check if the URL is correct and Stash is running."
         )
-        return response.json()
+    except httpx.TimeoutException as e:
+        logger.error(f"Timeout connecting to Stash: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Connection timeout to Stash at {config['stash_url']}. Please check if Stash is running and accessible."
+        )
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error from Stash: {e.response.status_code}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stash returned error {e.response.status_code}. Please check your API key and Stash configuration."
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error during Stash request: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unexpected error contacting Stash: {str(e)}"
+        )
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     config = get_config()
+    show_settings = is_first_run()
     return templates.TemplateResponse("index.html", {
         "request": request,
-        "config": config
+        "config": config,
+        "show_settings": show_settings
     })
 
 @app.get("/api/config")
 async def get_config_api():
-    return get_config()
+    config = get_config()
+    return config
 
 @app.post("/api/config")
 async def update_config(settings: Settings):
@@ -139,7 +171,7 @@ async def update_config(settings: Settings):
 async def search_scenes(search_params: SearchParams):
     # Build GraphQL query for Stash
     filter_conditions = []
-    
+
     if search_params.max_width:
         filter_conditions.append(f'width: {{value: {search_params.max_width}, modifier: GREATER_THAN}}')
     if search_params.max_height:
@@ -154,9 +186,9 @@ async def search_scenes(search_params: SearchParams):
         filter_conditions.append(f'video_codec: {{value: "{search_params.codec}", modifier: NOT_EQUALS}}')
     if search_params.path:
         filter_conditions.append(f'path: {{value: "{search_params.path}", modifier: INCLUDES}}')
-    
+
     filter_str = ", ".join(filter_conditions)
-    
+
     query = f"""
     query SearchScenes {{
       scenes(filter: {{ {filter_str} }}) {{
@@ -176,21 +208,21 @@ async def search_scenes(search_params: SearchParams):
       }}
     }}
     """
-    
+
     result = await stash_request(query)
     if 'errors' in result:
         raise HTTPException(status_code=400, detail=result['errors'])
-    
+
     scenes = []
     for scene_data in result['data']['scenes']:
         scenes.append(Scene(**scene_data))
-    
+
     return {"scenes": scenes}
 
 @app.post("/api/queue-conversion")
 async def queue_conversion(scene_ids: List[str]):
     config = get_config()
-    
+
     # Get scene details from Stash
     scenes_query = """
     query GetScenes($ids: [ID!]) {
@@ -211,29 +243,29 @@ async def queue_conversion(scene_ids: List[str]):
       }
     }
     """
-    
+
     result = await stash_request(scenes_query, {"ids": scene_ids})
     if 'errors' in result:
         raise HTTPException(status_code=400, detail=result['errors'])
-    
+
     for scene_data in result['data']['scenes']:
         scene = Scene(**scene_data)
         task_id = str(uuid.uuid4())
         log_file = os.path.join(LOGS_DIR, f"{scene.id}.log")
-        
+
         task = ConversionTask(
             task_id=task_id,
             scene=scene,
             log_file=log_file
         )
-        
+
         conversion_queue.append(task)
         task_status[task_id] = task
-    
+
     # Start processing if not already running
     if len(active_tasks) < config['max_concurrent_tasks']:
         asyncio.create_task(process_conversion_queue())
-    
+
     return {"status": "queued", "count": len(scene_ids)}
 
 @app.get("/api/conversion-status")
@@ -249,13 +281,13 @@ async def cancel_conversion(task_id: str):
     if task_id in active_tasks:
         # This would need proper process termination in a real implementation
         active_tasks.remove(task_id)
-    
+
     for i, task in enumerate(conversion_queue):
         if task.task_id == task_id:
             conversion_queue.pop(i)
             task_status.pop(task_id, None)
             break
-    
+
     return {"status": "cancelled"}
 
 @app.post("/api/clear-completed")
@@ -266,74 +298,74 @@ async def clear_completed():
 
 async def process_conversion_queue():
     config = get_config()
-    
+
     while conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
         task = conversion_queue[0]
         if task.status == "pending":
             active_tasks.add(task.task_id)
             task.status = "processing"
             asyncio.create_task(convert_video(task))
-        
+
         # Remove from queue if completed or error
         if task.status in ["completed", "error"]:
             conversion_queue.pop(0)
             active_tasks.discard(task.task_id)
-        
+
         await asyncio.sleep(0.1)
 
 async def convert_video(task: ConversionTask):
     config = get_config()
     video_settings = config['video_settings']
-    
+
     try:
         input_file = task.scene.path
         base_name = os.path.splitext(input_file)[0]
         temp_output = f"{base_name}.converting.{video_settings['container']}"
         final_output = await find_available_filename(base_name, video_settings['container'])
-        
+
         # Build FFmpeg command
         ffmpeg_cmd = build_ffmpeg_command(input_file, temp_output, video_settings)
-        
+
         # Write to log
         with open(task.log_file, 'a') as log:
             log.write(f"Starting conversion: {input_file} -> {final_output}\n")
             log.write(f"FFmpeg command: {ffmpeg_cmd}\n")
-        
+
         # Run FFmpeg
         process = await asyncio.create_subprocess_shell(
             ffmpeg_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        
+
         # Monitor progress (simplified - in reality you'd parse FFmpeg output)
         while process.returncode is None:
             await asyncio.sleep(1)
             # Update progress (this is simplified)
             task.progress += 1  # Would need proper progress calculation
-        
+
         stdout, stderr = await process.communicate()
-        
+
         with open(task.log_file, 'a') as log:
             log.write(stdout.decode())
             log.write(stderr.decode())
-        
+
         if process.returncode == 0:
             # Rename temporary file to final name
             os.rename(temp_output, final_output)
-            
+
             # Update Stash
             await update_stash_scene(task.scene.id, final_output)
-            
+
             # Delete original file
             os.remove(input_file)
-            
+
             task.status = "completed"
             task.output_file = final_output
         else:
             task.status = "error"
             task.error = f"FFmpeg failed with return code {process.returncode}"
-    
+
     except Exception as e:
         task.status = "error"
         task.error = str(e)
@@ -341,9 +373,9 @@ async def convert_video(task: ConversionTask):
 
 def build_ffmpeg_command(input_file: str, output_file: str, settings: Dict[str, Any]) -> str:
     framerate_option = f"-r {settings['framerate']}" if settings.get('framerate') else ""
-    
+
     cmd = f"""ffmpeg -i "{input_file}" -filter_complex "scale=ceil(iw*min(1,min({settings['width']}/iw,{settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf 28 -c:a aac -b:v {settings['bitrate']} -maxrate {settings['bitrate']} -buffersize {settings['buffer_size']} -f {settings['container']} "{output_file}" """
-    
+
     return cmd
 
 async def find_available_filename(base_name: str, container: str) -> str:
@@ -353,7 +385,7 @@ async def find_available_filename(base_name: str, container: str) -> str:
             candidate = f"{base_name}.{container}"
         else:
             candidate = f"{base_name}_{counter}.{container}"
-        
+
         if not os.path.exists(candidate):
             return candidate
         counter += 1
@@ -372,18 +404,18 @@ async def sse_endpoint(request: Request):
             while True:
                 if await request.is_disconnected():
                     break
-                
+
                 # Send conversion status
                 status_data = {
                     "queue": [task.dict() for task in conversion_queue],
                     "active": list(active_tasks)
                 }
-                
+
                 yield f"data: {json.dumps(status_data)}\n\n"
                 await asyncio.sleep(1)
         finally:
             sse_clients.discard(client_id)
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -396,9 +428,9 @@ async def sse_endpoint(request: Request):
 def convert_bitrate_to_bps(bitrate_str: str) -> int:
     """Convert bitrate string (e.g., '1000k') to bits per second"""
     multipliers = {'k': 1000, 'm': 1000000, 'g': 1000000000}
-    if bitrate_str[-1].lower() in multipliers:
+    if bitrate_str and bitrate_str[-1].lower() in multipliers:
         return int(bitrate_str[:-1]) * multipliers[bitrate_str[-1].lower()]
-    return int(bitrate_str)
+    return int(bitrate_str) if bitrate_str else 0
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=9899, reload=True)

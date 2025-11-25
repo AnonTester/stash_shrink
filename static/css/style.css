@@ -310,3 +310,37 @@ input, select {
         justify-content: center;
     }
 }
+
+/* First run modal styles */
+.modal.first-run {
+    background-color: rgba(0, 0, 0, 0.8);
+}
+
+.modal.first-run .modal-content {
+    max-width: 700px;
+}
+
+.first-run-note {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background-color: #fef3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 0.375rem;
+    color: #856404;
+    text-align: center;
+}
+
+.modal.first-run .close {
+    display: none;
+}
+
+/* Disabled state for first run */
+body.first-run main {
+    opacity: 0.3;
+    pointer-events: none;
+}
+
+body.first-run header {
+    opacity: 0.7;
+    pointer-events: none;
+}
