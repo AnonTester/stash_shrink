@@ -2,6 +2,12 @@
 
 {% block content %}
 <div class="container">
+    <!-- Navigation between sections -->
+    <div class="section-nav" style="margin-bottom: 1rem;">
+        <button id="show-search" class="btn btn-secondary" style="display: none;">Back to Search</button>
+        <button id="show-conversion" class="btn btn-secondary">View Conversion Queue</button>
+    </div>
+    
     <!-- Search Section -->
     <section class="search-section">
         <h2>Search Videos</h2>
@@ -143,10 +149,10 @@
     </section>
 
     <!-- Conversion Section -->
-    <section class="conversion-section" style="display: none;">
+    <section class="conversion-section">
         <h2>Conversion Queue</h2>
         <div class="conversion-controls">
-            <button id="cancel-all" class="btn btn-danger">Cancel All</button>
+            <button id="cancel-all" class="btn btn-danger" {% if not conversion_queue %}disabled{% endif %}>Cancel All</button>
             <button id="clear-completed" class="btn btn-secondary">Clear Completed</button>
         </div>
 

@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
 conversion_queue = []
 conversion_tasks = {}
 active_tasks = set()
+QUEUE_STATE_FILE = "conversion_queue.json"
 task_status = {}
 sse_clients = set()
 
@@ -124,7 +125,6 @@ class ConversionTask(BaseModel):
     progress: float = 0.0
     eta: Optional[float] = None
     log_file: str
-    process: Optional[Any] = None
     output_file: Optional[str] = None
     error: Optional[str] = None
 
@@ -146,6 +146,61 @@ def get_config():
 
 def is_first_run():
     return not os.path.exists(CONFIG_FILE)
+
+def save_queue_state():
+    """Save the conversion queue to disk"""
+    try:
+        queue_data = []
+        for task in conversion_queue:
+            # Convert task to serializable format
+            task_data = {
+                "task_id": task.task_id,
+                "scene": task.scene.dict(),
+                "status": task.status,
+                "progress": task.progress,
+                "eta": task.eta,
+                "log_file": task.log_file,
+                "output_file": task.output_file,
+                "error": task.error
+            }
+            queue_data.append(task_data)
+
+        with open(QUEUE_STATE_FILE, 'w') as f:
+            json.dump(queue_data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save queue state: {e}")
+
+def load_queue_state():
+    """Load the conversion queue from disk"""
+    global conversion_queue
+    if os.path.exists(QUEUE_STATE_FILE):
+        try:
+            with open(QUEUE_STATE_FILE, 'r') as f:
+                queue_data = json.load(f)
+
+            for task_data in queue_data:
+                scene = Scene(**task_data["scene"])
+                task = ConversionTask(
+                    task_id=task_data["task_id"],
+                    scene=scene,
+                    status=task_data["status"],
+                    progress=task_data["progress"],
+                    eta=task_data["eta"],
+                    log_file=task_data["log_file"],
+                    output_file=task_data["output_file"],
+                    error=task_data["error"]
+                )
+                conversion_queue.append(task)
+
+                # Rebuild task_status
+                task_status[task_data["task_id"]] = task
+
+            logger.info(f"Loaded {len(conversion_queue)} tasks from queue state")
+        except Exception as e:
+            logger.error(f"Failed to load queue state: {e}")
+
+# Load queue state on startup
+load_queue_state()
 
 def apply_path_mappings(file_path: str, path_mappings: List[str]) -> str:
     """
@@ -545,6 +600,7 @@ async def queue_conversion(scene_ids: List[str]):
                     conversion_queue.append(task)
                     task_status[task_id] = task
                     queued_count += 1
+                    save_queue_state()  # Save after adding to queue                    
             except Exception as e:
                 logger.error(f"Failed to queue scene {scene_data.get('id', 'unknown')}: {e}")
                 continue
@@ -569,36 +625,39 @@ async def conversion_status():
 
 @app.post("/api/cancel-conversion/{task_id}")
 async def cancel_conversion(task_id: str):
-    # Find the task and terminate its process if running
-    task_to_cancel = None
-    for task in conversion_queue:
-        if task.task_id == task_id:
-            task_to_cancel = task
-            break
-    
-    # Terminate the process if it's running
-    if task_id in active_tasks:
-        if task_to_cancel and task_to_cancel.process:
-            try:
-                # Terminate the FFmpeg process and its children
-                pgid = os.getpgid(task_to_cancel.process.pid)
-                os.killpg(pgid, signal.SIGTERM)
-                logger.info(f"Terminated process for task {task_id}")
-                # Wait a bit for graceful termination
-                await asyncio.sleep(2)
-                if task_to_cancel.process.returncode is None:
-                    os.killpg(pgid, signal.SIGKILL)
-                    logger.info(f"Force killed process for task {task_id}")
-            except Exception as e:
-                logger.error(f"Error terminating process for task {task_id}: {e}")
-        active_tasks.remove(task_id)
-    
     for i, task in enumerate(conversion_queue):
         if task.task_id == task_id:
+            # Mark task as cancelled
+            task.status = "cancelled"
+            task.error = "Conversion cancelled by user"
+            
+            # Remove from active tasks
+            if task_id in active_tasks:
+                active_tasks.remove(task_id)
+            
+            # Clean up temporary files if they exist
+            if task.output_file and os.path.exists(task.output_file):
+                try:
+                    os.remove(task.output_file)
+                    logger.info(f"Cleaned up output file for cancelled task: {task.output_file}")
+                except Exception as e:
+                    logger.error(f"Failed to clean up output file {task.output_file}: {e}")
+            
+            # Write cancellation to log
+            try:
+                with open(task.log_file, 'a') as log:
+                    log.write(f"\n--- Conversion cancelled by user ---\n")
+            except Exception as e:
+                logger.error(f"Failed to write cancellation to log: {e}")
+            
+            logger.info(f"Cancelled conversion task {task_id} for scene: {task.scene.title}")
+            
+            # Remove from queue            
             conversion_queue.pop(i)
             task_status.pop(task_id, None)
             break
     
+    save_queue_state()  # Save after cancellation    
     return {"status": "cancelled"}
 
 @app.post("/api/clear-completed")
@@ -606,6 +665,27 @@ async def clear_completed():
     global conversion_queue
     conversion_queue = [task for task in conversion_queue if task.status not in ["completed", "error"]]
     return {"status": "cleared"}
+
+@app.post("/api/cancel-all-conversions")
+async def cancel_all_conversions():
+    global conversion_queue
+    cancelled_count = 0
+
+    # Create a copy of task IDs to avoid modification during iteration
+    task_ids = [task.task_id for task in conversion_queue]
+
+    for task_id in task_ids:
+        try:
+            await cancel_conversion(task_id)
+            cancelled_count += 1
+        except Exception as e:
+            logger.error(f"Failed to cancel task {task_id}: {e}")
+
+    # Clear the queue and save state
+    conversion_queue = []
+    save_queue_state()
+
+    return {"status": "cancelled", "count": cancelled_count}
 
 async def process_conversion_queue():
     config = get_config()
@@ -621,6 +701,7 @@ async def process_conversion_queue():
         if task.status in ["completed", "error"]:
             conversion_queue.pop(0)
             active_tasks.discard(task.task_id)
+            save_queue_state()  # Save when task completes or errors            
         
         await asyncio.sleep(0.1)
 
@@ -701,26 +782,21 @@ async def convert_video(task: ConversionTask):
         # Start time for ETA calculation
         start_time = time.time()
         
-        # Run FFmpeg and capture progress - use process group for proper termination
+        # Run FFmpeg and capture progress
         process = await asyncio.create_subprocess_shell(
             ffmpeg_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            universal_newlines=True,
-            preexec_fn=os.setsid  # Create process group for proper termination
+            preexec_fn=os.setsid
         )
-        
-        # Store the process in the task for potential cancellation
-        task.process = process
-        logger.info(f"FFmpeg process started with PID: {process.pid}")
         
         # Read stderr line by line to capture progress
         while True:
-            line = await process.stderr.readline()
-            if not line:
+            line_bytes = await process.stderr.readline()
+            if not line_bytes:
                 break
                 
-            line = line.strip()
+            line = line_bytes.decode('utf-8', errors='ignore').strip()
             
             # Write to log
             with open(task.log_file, 'a') as log:
@@ -737,25 +813,33 @@ async def convert_video(task: ConversionTask):
                     remaining_time = total_estimated_time - elapsed_time
                     task.eta = remaining_time
             
-            # Check if process has finished
-            if process.returncode is not None:
+            # Check if task was cancelled
+            if task.status == "cancelled":
+                process.terminate()
                 break
+                    
+        # Wait for process to complete and capture any remaining output
+        stdout_bytes, stderr_bytes = await process.communicate()
         
-        # Wait for process to complete
-        stdout, stderr = await process.communicate()
+        # Decode the remaining output
+        stdout = stdout_bytes.decode('utf-8', errors='ignore') if stdout_bytes else ""
+        stderr = stderr_bytes.decode('utf-8', errors='ignore') if stderr_bytes else ""
         
         # Final log entry
         with open(task.log_file, 'a') as log:
             log.write("-" * 80 + "\n")
             log.write(f"FFmpeg process completed with return code: {process.returncode}\n")
+            log.write(f"Delete original setting: {delete_original}\n")
+            if input_file and os.path.exists(input_file):
+                log.write(f"Original file exists: {input_file}\n")
+            else:
+                log.write(f"Original file not found: {input_file}\n")
+                
             if stdout:
                 log.write(f"STDOUT: {stdout}\n")
             if stderr:
                 log.write(f"STDERR: {stderr}\n")
         
-        # Clear the process reference after completion
-        task.process = None
-
         if process.returncode == 0:
             # Verify the output file was created
             if not os.path.exists(temp_output):
@@ -787,19 +871,15 @@ async def convert_video(task: ConversionTask):
             task.progress = 100.0
             
             logger.info(f"Successfully converted {input_file} to {final_output}")
+            save_queue_state()  # Save on successful completion            
         else:
             task.status = "error"
             task.error = f"FFmpeg failed with return code {process.returncode}"
             logger.error(f"FFmpeg conversion failed for {input_file}")
-    
     except Exception as e:
         task.status = "error"
         task.error = str(e)
         logger.error(f"Conversion failed for {task.scene.files[0].path if task.scene.files else 'unknown'}: {e}")
-        
-        # Log whether original file would be deleted
-        if delete_original:
-            logger.info(f"Original file would be deleted on success: {input_file}")
         logger.info(f"Delete original setting: {delete_original}")
         
         # Clean up temporary file if it exists
@@ -809,14 +889,16 @@ async def convert_video(task: ConversionTask):
                 os.remove(temp_output)
             except Exception as cleanup_error:
                 logger.error(f"Failed to clean up temporary file {temp_output}: {cleanup_error}")
-        
-        # Ensure process reference is cleared even on error
-        task.process = None                
+
+        save_queue_state()  # Save on error
 
 def build_ffmpeg_command(input_file: str, output_file: str, settings: Dict[str, Any]) -> str:
     framerate_option = f"-r {settings['framerate']}" if settings.get('framerate') else ""
     
-    cmd = f"""ffmpeg -i "{input_file}" -filter_complex "scale=ceil(iw*min(1,min({settings['width']}/iw,{settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf 28 -c:a aac -b:v {settings['bitrate']} -maxrate {settings['bitrate']} -buffersize {settings['buffer_size']} -f {settings['container']} "{output_file}" """
+    # Fixed: escape commas in filter complex and use bufsize instead of buffersize
+    cmd = f"""ffmpeg -y -hide_banner -loglevel info -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\,min({settings['width']}/iw\,{settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf 28 -c:a aac -b:v {settings['bitrate']} -maxrate {settings['bitrate']} -bufsize {settings['buffer_size']} -f {settings['container']} "{output_file}" """    
+     
+    logger.debug(f"FFmpeg command: {cmd}")    
     
     return cmd
 
@@ -873,9 +955,26 @@ async def sse_endpoint(request: Request):
                 if await request.is_disconnected():
                     break
                 
-                # Send conversion status
+                # Create serializable conversion status
+                serializable_queue = []
+                for task in conversion_queue:
+                    task_data = {
+                        "task_id": task.task_id,
+                        "scene": {
+                            "id": task.scene.id,
+                            "title": task.scene.title,
+                            "files": [file.dict() for file in task.scene.files] if task.scene.files else []
+                        },
+                        "status": task.status,
+                        "progress": task.progress,
+                        "eta": task.eta,
+                        "output_file": task.output_file,
+                        "error": task.error
+                    }
+                    serializable_queue.append(task_data)
+                
                 status_data = {
-                    "queue": [task.dict() for task in conversion_queue],
+                    "queue": serializable_queue,
                     "active": list(active_tasks)
                 }
                 

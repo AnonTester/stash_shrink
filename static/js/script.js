@@ -104,6 +104,12 @@ class StashShrinkApp {
         // Use video settings button
         document.getElementById('use-video-settings').addEventListener('click', () => this.useVideoSettings());
         
+        // Section navigation
+        document.getElementById('show-search').addEventListener('click', () => this.showSearchSection());
+        document.getElementById('show-conversion').addEventListener('click', () => this.showConversionSection());
+        
+        this.showConversionSection(); // Always show conversion section by default now
+
         // Selection controls
         document.getElementById('select-all').addEventListener('click', () => this.selectAll());
         document.getElementById('select-none').addEventListener('click', () => this.selectNone());
@@ -723,9 +729,24 @@ class StashShrinkApp {
     showConversionSection() {
         document.querySelector('.results-section').style.display = 'none';
         document.querySelector('.conversion-section').style.display = 'block';
+        document.getElementById('show-search').style.display = 'inline-block';
+        document.getElementById('show-conversion').style.display = 'none';
+        this.startSSE(); // Ensure SSE is running when viewing conversions
+    }
+
+    showSearchSection() {
+        document.querySelector('.results-section').style.display = 'block';
+        document.querySelector('.conversion-section').style.display = 'none';
+        document.getElementById('show-search').style.display = 'none';
+        document.getElementById('show-conversion').style.display = 'inline-block';        
     }
 
     startSSE() {
+        // Don't start multiple SSE connections
+        if (this.eventSource && this.eventSource.readyState !== EventSource.CLOSED) {
+            return;
+        }
+                
         if (this.eventSource) {
             this.eventSource.close();
         }
@@ -754,8 +775,15 @@ class StashShrinkApp {
 
         queue.forEach(task => {
             const row = document.createElement('tr');
+            const sceneTitle = task.scene.title || 'Untitled';
+            const fileName = task.scene.files && task.scene.files.length > 0 ? 
+                task.scene.files[0].basename : 'Unknown file';
+                        
             row.innerHTML = `
-                <td>${task.scene.title || 'Untitled'}</td>
+                <td>
+                    <div><strong>${sceneTitle}</strong></div>
+                    <div style="font-size: 0.875rem; color: var(--secondary-color);">${fileName}</div>
+                </td>
                 <td class="status-${task.status}">${task.status}</td>
                 <td>
                     <div class="progress-bar">
@@ -769,7 +797,7 @@ class StashShrinkApp {
                          <button class="btn btn-primary" onclick="app.retryConversion('${task.task_id}')">Retry</button>` :
                         ''}
                     ${task.status === 'pending' || task.status === 'processing' ?
-                        `<button class="btn btn-danger" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` :
+                        `<button class="btn btn-danger" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` : 
                         ''}
                     ${task.status === 'completed' ?
                         `<button class="btn btn-secondary" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` :
@@ -807,8 +835,20 @@ class StashShrinkApp {
 
     async cancelAllConversions() {
         if (confirm('Are you sure you want to cancel all conversions?')) {
-            // This would need to be implemented in the backend
-            alert('Cancel all functionality to be implemented');
+            try {
+                const response = await fetch('/api/cancel-all-conversions', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    this.showToast('All conversions cancelled', 'success');
+                } else {
+                    throw new Error('Failed to cancel all conversions');
+                }
+            } catch (error) {
+                console.error('Failed to cancel all conversions:', error);
+                this.showToast('Failed to cancel all conversions: ' + error.message, 'error');
+            }
         }
     }
 

@@ -137,7 +137,7 @@ input, select {
     border: 1px solid var(--border-color);
 }
 
-textarea {
+.form-group textarea {
     width: 100%;
     min-height: 100px;
     font-family: monospace;
@@ -149,6 +149,11 @@ textarea {
     margin-top: 0.25rem;
     color: var(--secondary-color);
     font-size: 0.875rem;
+}
+
+/* Ensure textarea uses full width in form sections */
+.form-section textarea {
+    width: 100%;
 }
 
 /* Inline checkbox labels */
