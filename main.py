@@ -232,10 +232,12 @@ async def update_config(settings: Settings):
 @app.post("/api/search")
 async def search_scenes(search_params: SearchParams):
     try:
-        # Use the provided GraphQL query structure
+        # Use the provided GraphQL query structure with pagination
         query = """
         query FindAllScenes {
-          findScenes {
+          findScenes(
+            filter: { per_page: -1 }
+          ) {
             count
             scenes {
               id
@@ -307,18 +309,19 @@ async def search_scenes(search_params: SearchParams):
                         include_file = False
 
                         # Check if file exceeds any of the maximum limits
-                        # If no limits are specified for a field, we don't filter by it
                         exceeds_limits = False
 
-                        # Check width
-                        if search_params.max_width and file.width and file.width > search_params.max_width:
-                            exceeds_limits = True
-                            logger.debug(f"File {file.basename} exceeds width: {file.width} > {search_params.max_width}")
+                        # Check width (only if file has width and we're filtering by width)
+                        if search_params.max_width is not None and file.width is not None:
+                            if file.width > search_params.max_width:
+                                exceeds_limits = True
+                                logger.debug(f"File {file.basename} exceeds width: {file.width} > {search_params.max_width}")
 
                         # Check height
-                        if search_params.max_height and file.height and file.height > search_params.max_height:
-                            exceeds_limits = True
-                            logger.debug(f"File {file.basename} exceeds height: {file.height} > {search_params.max_height}")
+                        if search_params.max_height is not None and file.height is not None:
+                            if file.height > search_params.max_height:
+                                exceeds_limits = True
+                                logger.debug(f"File {file.basename} exceeds height: {file.height} > {search_params.max_height}")
 
                         # Check bitrate
                         if search_params.max_bitrate and file.bit_rate:
@@ -328,15 +331,16 @@ async def search_scenes(search_params: SearchParams):
                                 logger.debug(f"File {file.basename} exceeds bitrate: {file.bit_rate} > {bitrate_value}")
 
                         # Check framerate
-                        if search_params.max_framerate and file.frame_rate and file.frame_rate > search_params.max_framerate:
-                            exceeds_limits = True
-                            logger.debug(f"File {file.basename} exceeds framerate: {file.frame_rate} > {search_params.max_framerate}")
+                        if search_params.max_framerate is not None and file.frame_rate is not None:
+                            if file.frame_rate > search_params.max_framerate:
+                                exceeds_limits = True
+                                logger.debug(f"File {file.basename} exceeds framerate: {file.frame_rate} > {search_params.max_framerate}")
 
                         # Check codec - include if codec doesn't match (we want to convert files with wrong codec)
                         wrong_codec = False
                         if search_params.codec and file.video_codec:
                             # Normalize codec names for comparison
-                            file_codec = file.video_codec.lower().replace('.', '')
+                            file_codec = (file.video_codec or '').lower().replace('.', '')
                             search_codec = search_params.codec.lower().replace('.', '')
                             if file_codec != search_codec:
                                 wrong_codec = True
@@ -353,9 +357,14 @@ async def search_scenes(search_params: SearchParams):
                             include_file = True
 
                         # If no filters are specified, include all files
-                        if not any([search_params.max_width, search_params.max_height,
-                                   search_params.max_bitrate, search_params.max_framerate,
-                                   search_params.codec, search_params.path]):
+                        if not any([
+                            search_params.max_width is not None,
+                            search_params.max_height is not None,
+                            search_params.max_bitrate is not None,
+                            search_params.max_framerate is not None,
+                            search_params.codec is not None,
+                            search_params.path is not None
+                        ]):
                             include_file = True
 
                         if include_file:
