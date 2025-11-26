@@ -9,6 +9,7 @@ class StashShrinkApp {
         this.eventSource = null;
         this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
         this.handleFirstRun();
+        this.queuedSceneIds = new Set();        
         this.totalPages = 1;
 
         this.initializeTheme();
@@ -17,6 +18,7 @@ class StashShrinkApp {
         this.loadConfig();
 
         // Check if we should show conversion section by default
+        this.updateSearchSectionVisibility();
         this.checkInitialView();
     }
 
@@ -25,6 +27,10 @@ class StashShrinkApp {
         try {
             const response = await fetch('/api/conversion-status');
             const statusData = await response.json();
+
+            // Track queued scene IDs
+            this.updateQueuedSceneIds(statusData.queue);
+
             const hasQueueItems = statusData.queue && statusData.queue.length > 0;
             
             if (hasQueueItems) {
@@ -36,6 +42,12 @@ class StashShrinkApp {
             console.error('Failed to load initial conversion status:', error);
             this.showSearchSection(); // Fallback to search section
         }
+    }
+
+    updateQueuedSceneIds(queue) {
+        this.queuedSceneIds.clear();
+        queue.forEach(task => this.queuedSceneIds.add(task.scene.id));
+        this.renderResults(); // Update checkboxes if results are displayed        
     }        
 
     initializeToastSystem() {
@@ -211,6 +223,7 @@ class StashShrinkApp {
             this.currentPage = 1;
             this.syncPaginationControls();
             this.renderResults();
+            this.updateSearchSectionVisibility();
         }
     }
 
@@ -473,12 +486,20 @@ class StashShrinkApp {
             const file = scene.files && scene.files.length > 0 ? scene.files[0] : null;
             if (!file) return;
             
+            const isQueued = this.queuedSceneIds.has(scene.id);
+            const isSelected = this.selectedScenes.has(scene.id) && !isQueued;
+            const checkboxDisabled = isQueued ? 'disabled' : '';
+
             const row = document.createElement('tr');
-            const isSelected = this.selectedScenes.has(scene.id);
-            
-            // Use title attribute for tooltips on title and path
+
             row.innerHTML = `
-                <td><input type="checkbox" class="scene-checkbox" value="${scene.id}" ${isSelected ? 'checked' : ''}></td>
+                 <td>
+                    <input type="checkbox" class="scene-checkbox" value="${scene.id}" 
+                           ${isSelected ? 'checked' : ''} 
+                           ${checkboxDisabled}
+                           ${isQueued ? 'title="Already in conversion queue"' : ''}>
+                    ${isQueued ? '<div style="font-size:10px;color:var(--success-color);">Queued</div>' : ''}
+                </td>
                 <td class="title-cell" title="${scene.title || 'Untitled'}">
                     <a href="${this.config.stash_url}/scenes/${scene.id}" target="_blank">${scene.title || 'Untitled'}</a>
                 </td>
@@ -496,6 +517,8 @@ class StashShrinkApp {
                 this.toggleSceneSelection(scene.id, e.target.checked);
             });
             
+            if (isQueued) row.style.opacity = '0.7';
+
             tbody.appendChild(row);
         });
         
@@ -540,7 +563,7 @@ class StashShrinkApp {
             this.currentPage = 1; // Reset to first page on new search
             this.selectedScenes.clear();
             this.syncPaginationControls();
-            this.syncPaginationControls();
+            this.updateSearchSectionVisibility();
             this.renderResults();
             
             this.showToast(`Found ${this.currentResults.length} scenes`, 'success');
@@ -643,6 +666,11 @@ class StashShrinkApp {
     }
 
     selectAll() {
+        // Don't select queued scenes
+        const currentPageScenes = this.getCurrentPageSceneIds().filter(id =>
+            !this.queuedSceneIds.has(id)
+        );
+        currentPageScenes.forEach(id => this.selectedScenes.add(id));
         const currentPageScenes = this.getCurrentPageSceneIds();
         currentPageScenes.forEach(id => this.selectedScenes.add(id));
         this.renderResults();
@@ -657,6 +685,8 @@ class StashShrinkApp {
     selectInvert() {
         const currentPageScenes = this.getCurrentPageSceneIds();
         currentPageScenes.forEach(id => {
+            // Skip queued scenes
+            if (this.queuedSceneIds.has(id)) return;
             if (this.selectedScenes.has(id)) {
                 this.selectedScenes.delete(id);
             } else {
@@ -750,6 +780,7 @@ class StashShrinkApp {
             if (response.ok) {
                 this.showConversionSection();
                 this.startSSE();
+                this.updateQueuedSceneIds((await response.json()).queue || []);
                 this.showToast(`Queued ${this.selectedScenes.size} scenes for conversion.`, 'success');
             } else {
                 throw new Error('Failed to queue conversion');
@@ -763,6 +794,7 @@ class StashShrinkApp {
     showConversionSection() {
         document.querySelector('.results-section').style.display = 'none';
         document.querySelector('.conversion-section').style.display = 'block';
+        document.querySelector('.search-section').style.display = 'none';
         document.getElementById('show-search').style.display = 'inline-block';
         document.getElementById('show-conversion').style.display = 'none';
         this.startSSE(); // Ensure SSE is running when viewing conversions
@@ -770,6 +802,7 @@ class StashShrinkApp {
 
     showSearchSection() {
         document.querySelector('.results-section').style.display = 'block';
+        document.querySelector('.search-section').style.display = 'block';
         document.querySelector('.conversion-section').style.display = 'none';
         document.getElementById('show-search').style.display = 'none';
         document.getElementById('show-conversion').style.display = 'inline-block';        
@@ -805,6 +838,7 @@ class StashShrinkApp {
 
     updateConversionStatus(statusData) {
         this.renderConversionTable(statusData.queue);
+        this.updateQueuedSceneIds(statusData.queue);
         this.updateProgressOverview(statusData.queue, statusData.active);
         this.updateConversionUI(statusData.queue);
     }
@@ -851,6 +885,7 @@ class StashShrinkApp {
         queue.forEach(task => {
             const row = document.createElement('tr');
             const sceneTitle = task.scene.title || 'Untitled';
+            const isError = task.status === 'error';
             const fileName = task.scene.files && task.scene.files.length > 0 ? 
                 task.scene.files[0].basename : 'Unknown file';
             const etaText = task.eta && task.eta > 0 ? this.formatTime(task.eta) : 'Calculating...';            
@@ -883,6 +918,7 @@ class StashShrinkApp {
                         ''}
                 </td>
             `;
+            if (isError) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
             tbody.appendChild(row);
         });
     }
@@ -890,13 +926,16 @@ class StashShrinkApp {
     updateProgressOverview(queue, activeTasks) {
         const total = queue.length;
         const completed = queue.filter(task => task.status === 'completed' || task.status === 'error').length;
+        const remaining = total - completed;
         const processing = activeTasks ? activeTasks.length : queue.filter(task => task.status === 'processing').length;
         const progress = total > 0 ? (completed / total) * 100 : 0;
 
         document.getElementById('overall-progress').style.width = `${progress}%`;
-        document.getElementById('progress-text').textContent = `${progress.toFixed(1)}% Complete`;
+        document.getElementById('progress-text').innerHTML = `
+            <strong>Total Queue Progress</strong><br>
+            ${progress.toFixed(1)}% Complete (${completed}/${total} files, ${remaining} remaining)
+        `;
 
-        // Update ETA based on active processing tasks
         const activeProcessingTasks = queue.filter(task => task.status === 'processing' && task.eta);
         if (activeProcessingTasks.length > 0) {
             // Use the maximum ETA among active tasks
@@ -917,7 +956,7 @@ class StashShrinkApp {
         const resultsSection = document.querySelector('.results-section');
         const hasResults = this.currentResults && this.currentResults.length > 0;
         
-        if (resultsSection) {
+        if (resultsSection && !this.isFirstRun) {
             resultsSection.style.display = hasResults ? 'block' : 'none';
         }
         

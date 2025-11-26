@@ -546,6 +546,11 @@ async def queue_conversion(scene_ids: List[str]):
     config = get_config()
     path_mappings = config.get('path_mappings', [])
     
+    # Check for duplicates
+    existing_scene_ids = {task.scene.id for task in conversion_queue}
+    new_scene_ids = set(scene_ids) - existing_scene_ids
+    scene_ids = list(new_scene_ids)
+
     try:
         # Get scene details from Stash using the new query structure
         scenes_query = """
