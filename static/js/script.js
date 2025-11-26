@@ -13,6 +13,59 @@ class StashShrinkApp {
         this.initializeEventListeners();
         this.loadConfig();
         this.handleFirstRun();
+
+        this.toastContainer = null;
+        this.initializeToastSystem();
+    }
+
+    initializeToastSystem() {
+        this.toastContainer = document.createElement('div');
+        this.toastContainer.className = 'toast-container';
+        document.body.appendChild(this.toastContainer);
+    }
+
+    showToast(message, type = 'info', duration = 5000) {
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+
+        const icons = {
+            success: '✓',
+            error: '✕',
+            warning: '⚠',
+            info: 'ℹ'
+        };
+
+        toast.innerHTML = `
+            <div class="toast-icon">${icons[type] || icons.info}</div>
+            <div class="toast-message">${message}</div>
+            <button class="toast-close">&times;</button>
+        `;
+
+        this.toastContainer.appendChild(toast);
+
+        // Animate in
+        setTimeout(() => toast.classList.add('show'), 10);
+
+        // Close button
+        toast.querySelector('.toast-close').addEventListener('click', () => {
+            this.hideToast(toast);
+        });
+
+        // Auto hide
+        if (duration > 0) {
+            setTimeout(() => this.hideToast(toast), duration);
+        }
+
+        return toast;
+    }
+
+    hideToast(toast) {
+        toast.classList.remove('show');
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 300);
     }
 
     handleFirstRun() {
@@ -140,7 +193,7 @@ class StashShrinkApp {
     async saveSettings(formData) {
         try {
             console.log('Saving settings...');
-
+            
             const settings = {
                 stash_url: formData.get('stash_url'),
                 api_key: formData.get('api_key'),
@@ -155,9 +208,9 @@ class StashShrinkApp {
                     container: formData.get('container') || 'mp4'
                 }
             };
-
+            
             console.log('Sending settings:', settings);
-
+            
             const response = await fetch('/api/config', {
                 method: 'POST',
                 headers: {
@@ -165,23 +218,21 @@ class StashShrinkApp {
                 },
                 body: JSON.stringify(settings)
             });
-
+            
             if (response.ok) {
                 this.config = settings;
-
+                
                 if (this.isFirstRun) {
-                    // Remove first run state and reload the page
                     this.isFirstRun = false;
                     document.body.classList.remove('first-run');
                     document.getElementById('settings-btn').style.display = 'block';
                     document.getElementById('settings-modal').classList.remove('first-run');
                     document.getElementById('settings-modal').style.display = 'none';
-
-                    // Show success message and enable the interface
-                    alert('Configuration saved successfully! You can now use Stash Shrink.');
+                    
+                    this.showToast('Configuration saved successfully! You can now use Stash Shrink.', 'success');
                 } else {
                     this.hideSettingsModal();
-                    alert('Settings saved successfully!');
+                    this.showToast('Settings saved successfully!', 'success');
                 }
             } else {
                 const errorData = await response.json();
@@ -189,16 +240,15 @@ class StashShrinkApp {
             }
         } catch (error) {
             console.error('Error saving settings:', error);
-            alert('Error saving settings: ' + error.message);
+            this.showToast('Error saving settings: ' + error.message, 'error');
         }
     }
 
     async handleSearch(e) {
         e.preventDefault();
 
-        // Don't allow search during first run
         if (this.isFirstRun) {
-            alert('Please complete the first-time setup by saving the configuration.');
+            this.showToast('Please complete the first-time setup by saving the configuration.', 'warning');
             return;
         }
 
@@ -231,22 +281,24 @@ class StashShrinkApp {
             this.selectedScenes.clear();
             this.renderResults();
             document.querySelector('.results-section').style.display = 'block';
+
+            this.showToast(`Found ${this.currentResults.length} scenes`, 'success');
         } catch (error) {
             console.error('Search failed:', error);
-            alert('Search failed: ' + error.message);
+            this.showToast('Search failed: ' + error.message, 'error');
         }
     }
 
     renderResults() {
         const tbody = document.querySelector('#results-table tbody');
         tbody.innerHTML = '';
-
+    
         // Sort results
         if (this.sortField) {
             this.currentResults.sort((a, b) => {
                 let aVal = this.getSortValue(a, this.sortField);
                 let bVal = this.getSortValue(b, this.sortField);
-
+                
                 if (this.sortDirection === 'asc') {
                     return aVal > bVal ? 1 : -1;
                 } else {
@@ -254,36 +306,40 @@ class StashShrinkApp {
                 }
             });
         }
-
+        
         // Paginate
         const startIndex = (this.currentPage - 1) * this.pageSize;
         const endIndex = Math.min(startIndex + this.pageSize, this.currentResults.length);
         const pageResults = this.currentResults.slice(startIndex, endIndex);
-
+        
         pageResults.forEach(scene => {
+            // Use the first file for display (you might want to handle multiple files differently)
+            const file = scene.files && scene.files.length > 0 ? scene.files[0] : null;
+            if (!file) return;
+            
             const row = document.createElement('tr');
             const isSelected = this.selectedScenes.has(scene.id);
-
+        
             row.innerHTML = `
                 <td><input type="checkbox" class="scene-checkbox" value="${scene.id}" ${isSelected ? 'checked' : ''}></td>
                 <td><a href="${this.config.stash_url}/scenes/${scene.id}" target="_blank">${scene.title || 'Untitled'}</a></td>
-                <td>${this.formatDuration(scene.file.duration)}</td>
-                <td>${this.formatFileSize(scene.file.size)}</td>
-                <td>${scene.file.video_codec}</td>
-                <td>${scene.file.width}</td>
-                <td>${scene.file.height}</td>
-                <td>${this.formatBitrate(scene.file.bit_rate)}</td>
-                <td>${scene.file.frame_rate}</td>
-                <td title="${scene.path}">${this.truncatePath(scene.path)}</td>
+                <td>${this.formatDuration(file.duration)}</td>
+                <td>${this.formatFileSize(file.size)}</td>
+                <td>${file.video_codec || 'N/A'}</td>
+                <td>${file.width || 'N/A'}</td>
+                <td>${file.height || 'N/A'}</td>
+                <td>${this.formatBitrate(file.bit_rate)}</td>
+                <td>${file.frame_rate || 'N/A'}</td>
+                <td title="${file.path}">${this.truncatePath(file.path)}</td>
             `;
-
+        
             row.querySelector('.scene-checkbox').addEventListener('change', (e) => {
                 this.toggleSceneSelection(scene.id, e.target.checked);
             });
-
+            
             tbody.appendChild(row);
         });
-
+        
         this.updatePagination();
         this.updateSelectionControls();
     }
@@ -390,17 +446,16 @@ class StashShrinkApp {
     }
 
     async queueConversion() {
-        // Don't allow conversion during first run
         if (this.isFirstRun) {
-            alert('Please complete the first-time setup by saving the configuration.');
+            this.showToast('Please complete the first-time setup by saving the configuration.', 'warning');
             return;
         }
-
+        
         if (this.selectedScenes.size === 0) {
-            alert('Please select at least one scene to convert.');
+            this.showToast('Please select at least one scene to convert.', 'warning');
             return;
         }
-
+        
         try {
             const response = await fetch('/api/queue-conversion', {
                 method: 'POST',
@@ -409,17 +464,17 @@ class StashShrinkApp {
                 },
                 body: JSON.stringify(Array.from(this.selectedScenes))
             });
-
+            
             if (response.ok) {
                 this.showConversionSection();
                 this.startSSE();
-                alert(`Queued ${this.selectedScenes.size} scenes for conversion.`);
+                this.showToast(`Queued ${this.selectedScenes.size} scenes for conversion.`, 'success');
             } else {
                 throw new Error('Failed to queue conversion');
             }
         } catch (error) {
             console.error('Conversion queue failed:', error);
-            alert('Failed to queue conversion: ' + error.message);
+            this.showToast('Failed to queue conversion: ' + error.message, 'error');
         }
     }
 
