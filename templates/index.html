@@ -5,7 +5,7 @@
     <!-- Navigation between sections -->
     <div class="section-nav" style="margin-bottom: 1rem;">
         <button id="show-search" class="btn btn-secondary" style="display: none;">Back to Search</button>
-        <button id="show-conversion" class="btn btn-secondary">View Conversion Queue</button>
+        <button id="show-conversion" class="btn btn-secondary" style="display: none;">View Conversion Queue</button>
     </div>
     
     <!-- Search Section -->
@@ -149,11 +149,11 @@
     </section>
 
     <!-- Conversion Section -->
-    <section class="conversion-section">
+    <section class="conversion-section" style="display: none;">
         <h2>Conversion Queue</h2>
         <div class="conversion-controls">
-            <button id="cancel-all" class="btn btn-danger" {% if not conversion_queue %}disabled{% endif %}>Cancel All</button>
-            <button id="clear-completed" class="btn btn-secondary">Clear Completed</button>
+            <button id="cancel-all" class="btn btn-danger">Cancel All</button>
+            <button id="clear-completed" class="btn btn-secondary">Clear Completed & Errors</button>            
         </div>
 
         <div class="progress-overview">

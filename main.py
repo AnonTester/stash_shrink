@@ -663,7 +663,11 @@ async def cancel_conversion(task_id: str):
 @app.post("/api/clear-completed")
 async def clear_completed():
     global conversion_queue
-    conversion_queue = [task for task in conversion_queue if task.status not in ["completed", "error"]]
+    tasks_to_keep = [task for task in conversion_queue if task.status in ["pending", "processing"]]
+    tasks_removed = len(conversion_queue) - len(tasks_to_keep)
+    conversion_queue = tasks_to_keep
+    save_queue_state()
+    logger.info(f"Cleared {tasks_removed} completed/error tasks from queue")    
     return {"status": "cleared"}
 
 @app.post("/api/cancel-all-conversions")
@@ -697,12 +701,6 @@ async def process_conversion_queue():
             task.status = "processing"
             asyncio.create_task(convert_video(task))
         
-        # Remove from queue if completed or error
-        if task.status in ["completed", "error"]:
-            conversion_queue.pop(0)
-            active_tasks.discard(task.task_id)
-            save_queue_state()  # Save when task completes or errors            
-        
         await asyncio.sleep(0.1)
 
 class FFmpegProgress:
@@ -710,6 +708,47 @@ class FFmpegProgress:
         self.total_duration = total_duration
         self.current_time = 0.0
         self.progress = 0.0
+        self.last_update = time.time()
+        
+    def parse_line(self, line: str):
+        """Parse FFmpeg output line to extract progress information"""
+        line = line.strip()
+        current_time = time.time()
+        
+        # Only process progress updates every 0.5 seconds to reduce CPU load
+        if current_time - self.last_update < 0.5:
+            return False
+            
+        self.last_update = current_time
+        
+        # Try multiple FFmpeg progress output formats
+        time_match = re.search(r'time=(\d+:\d+:\d+\.\d+)', line)
+        if time_match:
+            time_str = time_match.group(1)
+            self.current_time = self.parse_time_string(time_str)
+            if self.total_duration > 0:
+                self.progress = min((self.current_time / self.total_duration) * 100, 99.0)  # Cap at 99% until complete
+            return True
+            
+        # Alternative format: time=00:01:23.45
+        time_match = re.search(r'time=(\d{2}:\d{2}:\d{2}\.\d{2})', line)
+        if time_match:
+            time_str = time_match.group(1)
+            self.current_time = self.parse_time_string(time_str)
+            if self.total_duration > 0:
+                self.progress = min((self.current_time / self.total_duration) * 100, 99.0)
+            return True
+            
+        # Look for frame information as fallback
+        frame_match = re.search(r'frame=\s*(\d+)', line)
+        if frame_match and self.total_duration > 0:
+            # Estimate progress based on frames if we don't have time info
+            # This is a rough estimate - 30fps default
+            estimated_duration = int(frame_match.group(1)) / 30
+            self.progress = min((estimated_duration / self.total_duration) * 100, 99.0)
+            return True
+            
+        return False        
         
     def parse_line(self, line: str):
         """Parse FFmpeg output line to extract progress information"""
@@ -795,6 +834,11 @@ async def convert_video(task: ConversionTask):
             line_bytes = await process.stderr.readline()
             if not line_bytes:
                 break
+            
+            # Check if process has finished
+            if process.returncode is not None:
+                # Process finished, break out of the loop
+                break            
                 
             line = line_bytes.decode('utf-8', errors='ignore').strip()
             
@@ -809,21 +853,28 @@ async def convert_video(task: ConversionTask):
                 # Calculate ETA
                 if task.progress > 0:
                     elapsed_time = time.time() - start_time
-                    total_estimated_time = elapsed_time / (task.progress / 100)
-                    remaining_time = total_estimated_time - elapsed_time
-                    task.eta = remaining_time
+                    if task.progress < 100:  # Don't calculate ETA if we're at 100%
+                        total_estimated_time = elapsed_time / (task.progress / 100)
+                        remaining_time = total_estimated_time - elapsed_time
+                        task.eta = max(0, remaining_time)  # Ensure ETA is not negative
+                    else:
+                        task.eta = 0
+                
+                logger.debug(f"Progress update: {task.progress:.1f}%, ETA: {task.eta:.1f}s, Current time: {progress_tracker.current_time:.1f}s")                    
             
             # Check if task was cancelled
             if task.status == "cancelled":
                 process.terminate()
                 break
+            
+            await asyncio.sleep(0.1)  # Small delay to prevent busy waiting            
                     
-        # Wait for process to complete and capture any remaining output
-        stdout_bytes, stderr_bytes = await process.communicate()
-        
+        # Capture any remaining output (though we should have read most of it)
+        remaining_stdout, remaining_stderr = await process.communicate()
+
         # Decode the remaining output
-        stdout = stdout_bytes.decode('utf-8', errors='ignore') if stdout_bytes else ""
-        stderr = stderr_bytes.decode('utf-8', errors='ignore') if stderr_bytes else ""
+        stdout = remaining_stdout.decode('utf-8', errors='ignore') if remaining_stdout else ""
+        stderr = remaining_stderr.decode('utf-8', errors='ignore') if remaining_stderr else ""        
         
         # Final log entry
         with open(task.log_file, 'a') as log:
@@ -869,6 +920,7 @@ async def convert_video(task: ConversionTask):
             task.status = "completed"
             task.output_file = final_output
             task.progress = 100.0
+            task.eta = 0            
             
             logger.info(f"Successfully converted {input_file} to {final_output}")
             save_queue_state()  # Save on successful completion            
@@ -895,8 +947,8 @@ async def convert_video(task: ConversionTask):
 def build_ffmpeg_command(input_file: str, output_file: str, settings: Dict[str, Any]) -> str:
     framerate_option = f"-r {settings['framerate']}" if settings.get('framerate') else ""
     
-    # Fixed: escape commas in filter complex and use bufsize instead of buffersize
-    cmd = f"""ffmpeg -y -hide_banner -loglevel info -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\,min({settings['width']}/iw\,{settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf 28 -c:a aac -b:v {settings['bitrate']} -maxrate {settings['bitrate']} -bufsize {settings['buffer_size']} -f {settings['container']} "{output_file}" """    
+    # Use progress reporting and verbose output for better progress tracking
+    cmd = f"""ffmpeg -y -hide_banner -loglevel verbose -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\,min({settings['width']}/iw\,{settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf 28 -c:a aac -b:v {settings['bitrate']} -maxrate {settings['bitrate']} -bufsize {settings['buffer_size']} -f {settings['container']} "{output_file}" """
      
     logger.debug(f"FFmpeg command: {cmd}")    
     

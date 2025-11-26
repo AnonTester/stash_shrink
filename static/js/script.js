@@ -8,14 +8,35 @@ class StashShrinkApp {
         this.sortDirection = null;
         this.eventSource = null;
         this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
+        this.handleFirstRun();
         this.totalPages = 1;
 
         this.initializeTheme();
         this.initializeToastSystem();
         this.initializeEventListeners();
         this.loadConfig();
-        this.handleFirstRun();
+
+        // Check if we should show conversion section by default
+        this.checkInitialView();
     }
+
+    async checkInitialView() {
+        // Load initial conversion status to determine what to show
+        try {
+            const response = await fetch('/api/conversion-status');
+            const statusData = await response.json();
+            const hasQueueItems = statusData.queue && statusData.queue.length > 0;
+            
+            if (hasQueueItems) {
+                this.showConversionSection();
+            } else {
+                this.showSearchSection();
+            }
+        } catch (error) {
+            console.error('Failed to load initial conversion status:', error);
+            this.showSearchSection(); // Fallback to search section
+        }
+    }        
 
     initializeToastSystem() {
         this.toastContainer = document.createElement('div');
@@ -108,8 +129,6 @@ class StashShrinkApp {
         document.getElementById('show-search').addEventListener('click', () => this.showSearchSection());
         document.getElementById('show-conversion').addEventListener('click', () => this.showConversionSection());
         
-        this.showConversionSection(); // Always show conversion section by default now
-
         // Selection controls
         document.getElementById('select-all').addEventListener('click', () => this.selectAll());
         document.getElementById('select-none').addEventListener('click', () => this.selectNone());
@@ -397,17 +416,31 @@ class StashShrinkApp {
 
     renderResults() {
         const tbody = document.querySelector('#results-table tbody');
-        if (!tbody) return;
+        const tableContainer = document.querySelector('.table-container');
+        const paginationControls = document.querySelectorAll('.pagination-controls');
+        const resultsControls = document.querySelector('.results-controls');        
         
         tbody.innerHTML = '';
         
         if (!this.currentResults || this.currentResults.length === 0) {
-            const row = document.createElement('tr');
-            row.innerHTML = `<td colspan="10" style="text-align: center; padding: 2rem;">No scenes found</td>`;
-            tbody.appendChild(row);
+            // Hide table and controls when no results
+            if (tableContainer) tableContainer.style.display = 'none';
+            paginationControls.forEach(control => control.style.display = 'none');
+            if (resultsControls) resultsControls.style.display = 'none';
+            
+            // Show "no results" message
+            const noResultsRow = document.createElement('tr');
+            noResultsRow.innerHTML = `<td colspan="10" style="text-align: center; padding: 2rem; color: var(--secondary-color);">No scenes found matching your search criteria</td>`;
+            tbody.appendChild(noResultsRow);
+            this.updateSearchSectionVisibility();
             this.syncPaginationControls();
             return;
         }
+
+        // Show table and controls when there are results
+        if (tableContainer) tableContainer.style.display = 'block';
+        paginationControls.forEach(control => control.style.display = 'flex');
+        if (resultsControls) resultsControls.style.display = 'flex';
         
         let displayResults = [...this.currentResults];
         
@@ -507,10 +540,11 @@ class StashShrinkApp {
             this.currentPage = 1; // Reset to first page on new search
             this.selectedScenes.clear();
             this.syncPaginationControls();
+            this.syncPaginationControls();
             this.renderResults();
-            document.querySelector('.results-section').style.display = 'block';
             
             this.showToast(`Found ${this.currentResults.length} scenes`, 'success');
+            this.updateSearchSectionVisibility();
         } catch (error) {
             console.error('Search failed:', error);
             this.showToast('Search failed: ' + error.message, 'error');
@@ -758,17 +792,58 @@ class StashShrinkApp {
         };
 
         this.eventSource.onerror = (error) => {
-            console.error('SSE error:', error);
-            // Attempt to reconnect after 5 seconds
-            setTimeout(() => this.startSSE(), 5000);
+            // Don't log normal page unload errors
+            if (this.eventSource.readyState === EventSource.CLOSED) {
+                console.log('SSE connection closed normally');
+            } else {
+                console.error('SSE error:', error);
+                // Attempt to reconnect after 5 seconds
+                setTimeout(() => this.startSSE(), 5000);
+            }            
         };
     }
 
     updateConversionStatus(statusData) {
         this.renderConversionTable(statusData.queue);
-        this.updateProgressOverview(statusData.queue);
+        this.updateProgressOverview(statusData.queue, statusData.active);
+        this.updateConversionUI(statusData.queue);
     }
 
+    updateButtonStates(queue) {
+        const hasActiveOrPending = queue.some(task => 
+            task.status === 'processing' || task.status === 'pending'
+        );
+        const hasCompleted = queue.some(task => task.status === 'completed');
+        const hasErrors = queue.some(task => task.status === 'error');
+        
+        // Update Cancel All button
+        const cancelAllBtn = document.getElementById('cancel-all');
+        if (cancelAllBtn) {
+            cancelAllBtn.disabled = !hasActiveOrPending;
+        }
+        
+        // Update Clear Completed button
+        const clearCompletedBtn = document.getElementById('clear-completed');
+        if (clearCompletedBtn) {
+            clearCompletedBtn.disabled = !(hasCompleted || hasErrors);
+        }
+
+        return { hasActiveOrPending, hasCompleted, hasErrors, hasAnyTasks: queue.length > 0 };
+    }
+
+    updateConversionUI(queue) {
+        const buttonStates = this.updateButtonStates(queue);
+        const hasAnyTasks = buttonStates.hasAnyTasks;
+
+        // Show/hide conversion section based on whether there are any tasks
+        const conversionSection = document.querySelector('.conversion-section');
+        if (conversionSection) {
+            conversionSection.style.display = hasAnyTasks ? 'block' : 'none';
+        }
+
+        this.updateSearchSectionVisibility();
+    }
+    
     renderConversionTable(queue) {
         const tbody = document.querySelector('#conversion-table tbody');
         tbody.innerHTML = '';
@@ -778,29 +853,33 @@ class StashShrinkApp {
             const sceneTitle = task.scene.title || 'Untitled';
             const fileName = task.scene.files && task.scene.files.length > 0 ? 
                 task.scene.files[0].basename : 'Unknown file';
+            const etaText = task.eta && task.eta > 0 ? this.formatTime(task.eta) : 'Calculating...';            
                         
             row.innerHTML = `
-                <td>
+                <td class="conversion-title">
                     <div><strong>${sceneTitle}</strong></div>
                     <div style="font-size: 0.875rem; color: var(--secondary-color);">${fileName}</div>
                 </td>
-                <td class="status-${task.status}">${task.status}</td>
-                <td>
+                <td class="conversion-status status-${task.status}">${task.status}</td>
+                <td class="conversion-progress">
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: ${task.progress}%"></div>
                     </div>
-                    ${task.progress.toFixed(1)}%
+                    <div style="display: flex; justify-content: space-between; font-size: 0.875rem; margin-top: 0.25rem;">
+                        <span>${task.progress.toFixed(1)}%</span>
+                        <span style="color: var(--secondary-color);">ETA: ${etaText}</span>
+                    </div>
                 </td>
-                <td>
+                <td class="conversion-actions">
                     ${task.status === 'error' ?
-                        `<button class="btn btn-secondary" onclick="app.showLog('${task.task_id}')">View Log</button>
-                         <button class="btn btn-primary" onclick="app.retryConversion('${task.task_id}')">Retry</button>` :
+                        `<button class="btn btn-secondary btn-sm" onclick="app.showLog('${task.task_id}')">Log</button>
+                         <button class="btn btn-primary btn-sm" onclick="app.retryConversion('${task.task_id}')">Retry</button>` : 
                         ''}
                     ${task.status === 'pending' || task.status === 'processing' ?
-                        `<button class="btn btn-danger" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` : 
+                        `<button class="btn btn-danger btn-sm" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` : 
                         ''}
                     ${task.status === 'completed' ?
-                        `<button class="btn btn-secondary" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` :
+                        `<button class="btn btn-secondary btn-sm" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` : 
                         ''}
                 </td>
             `;
@@ -808,23 +887,43 @@ class StashShrinkApp {
         });
     }
 
-    updateProgressOverview(queue) {
+    updateProgressOverview(queue, activeTasks) {
         const total = queue.length;
-        const completed = queue.filter(task => task.status === 'completed').length;
-        const processing = queue.filter(task => task.status === 'processing').length;
+        const completed = queue.filter(task => task.status === 'completed' || task.status === 'error').length;
+        const processing = activeTasks ? activeTasks.length : queue.filter(task => task.status === 'processing').length;
         const progress = total > 0 ? (completed / total) * 100 : 0;
 
         document.getElementById('overall-progress').style.width = `${progress}%`;
         document.getElementById('progress-text').textContent = `${progress.toFixed(1)}% Complete`;
 
-        // Simple ETA calculation (would need more sophisticated logic in reality)
-        if (processing > 0) {
+        // Update ETA based on active processing tasks
+        const activeProcessingTasks = queue.filter(task => task.status === 'processing' && task.eta);
+        if (activeProcessingTasks.length > 0) {
+            // Use the maximum ETA among active tasks
+            const maxEta = Math.max(...activeProcessingTasks.map(task => task.eta || 0));
+            document.getElementById('eta-text').textContent = `ETA: ${this.formatTime(maxEta)}`;
+        } else if (processing > 0) {
+            // Fallback ETA calculation    
             const remaining = total - completed;
-            const estimatedTime = remaining * 2; // Placeholder
+            const estimatedTime = remaining * 60; // Placeholder: 1 minute per remaining item
             document.getElementById('eta-text').textContent = `ETA: ${this.formatTime(estimatedTime)}`;
+        } else {
+            document.getElementById('eta-text').textContent = 'ETA: --';    
         }
     }
 
+    updateSearchSectionVisibility() {
+        const searchSection = document.querySelector('.search-section');
+        const resultsSection = document.querySelector('.results-section');
+        const hasResults = this.currentResults && this.currentResults.length > 0;
+        
+        if (resultsSection) {
+            resultsSection.style.display = hasResults ? 'block' : 'none';
+        }
+        
+        // Always show search section
+    }
+    
     async cancelConversion(taskId) {
         try {
             await fetch(`/api/cancel-conversion/${taskId}`, { method: 'POST' });
@@ -904,9 +1003,19 @@ class StashShrinkApp {
     }
 
     formatTime(seconds) {
+        if (!seconds || seconds <= 0) return '--';
+        
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
-        return `${hours}h ${minutes}m`;
+        const secs = Math.floor(seconds % 60);
+        
+        if (hours > 0) {
+            return `${hours}h ${minutes}m ${secs}s`;
+        } else if (minutes > 0) {
+            return `${minutes}m ${secs}s`;
+        } else {
+            return `${secs}s`;
+        }        
     }
 
     truncatePath(path, maxLength = 50) {

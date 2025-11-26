@@ -508,6 +508,66 @@ input, select {
 }
 
 /* Conversion progress */
+.conversion-section .data-table {
+    table-layout: fixed;
+}
+
+/* Conversion table column widths - fixed for status and actions, flexible for title and progress */
+.conversion-section .data-table th:nth-child(1),
+.conversion-section .data-table td:nth-child(1) {
+    width: auto; /* Title - flexible width */
+    min-width: 200px;
+    max-width: none;    
+}
+
+.conversion-section .data-table th:nth-child(2),
+.conversion-section .data-table td:nth-child(2) {
+    width: 140px; /* Status - fixed width */
+    min-width: 140px;
+    max-width: 140px;
+    text-align: center;    
+}
+
+.conversion-section .data-table th:nth-child(3),
+.conversion-section .data-table td:nth-child(3) {
+    width: auto; /* Progress - flexible width */
+    min-width: 250px;
+    max-width: none;    
+}
+
+.conversion-section .data-table th:nth-child(4),
+.conversion-section .data-table td:nth-child(4) {
+    width: 180px; /* Actions - fixed width */
+    min-width: 180px;
+    max-width: 180px;
+    text-align: right;
+}
+
++/* Conversion table specific styling */
+.conversion-actions {
+    text-align: right !important;
+}
+
+/* Smaller buttons for actions */
+.btn-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    margin-left: 0.25rem;
+}
+
+/* Status cell styling */
+.conversion-status {
+    text-align: center;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+/* Title cell - allow wrapping for long filenames */
+.conversion-title {
+    word-break: break-word;
+}
+
+/* Progress bar in conversion table */
 .progress-overview {
     background-color: var(--header-bg);
     padding: 1.5rem;

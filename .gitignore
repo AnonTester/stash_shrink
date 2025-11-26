@@ -2,6 +2,7 @@
 logs/*
 .git
 config.json
+conversion_queue.json
 
 .DS_Store
 **/__pycache__/
