@@ -10,6 +10,7 @@ class StashShrinkApp {
         this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
         this.handleFirstRun();
         this.queuedSceneIds = new Set();        
+        this.isQueuePaused = false;
         this.totalPages = 1;
 
         this.initializeTheme();
@@ -27,6 +28,9 @@ class StashShrinkApp {
         try {
             const response = await fetch('/api/conversion-status');
             const statusData = await response.json();
+
+            // Load pause state
+            this.isQueuePaused = statusData.paused || false;
 
             // Track queued scene IDs
             this.updateQueuedSceneIds(statusData.queue);
@@ -154,6 +158,7 @@ class StashShrinkApp {
         document.getElementById('convert-videos').addEventListener('click', () => this.queueConversion());
         document.getElementById('cancel-all').addEventListener('click', () => this.cancelAllConversions());
         document.getElementById('clear-completed').addEventListener('click', () => this.clearCompleted());
+        document.getElementById('toggle-pause').addEventListener('click', () => this.toggleQueuePause());
 
         // Pagination - Top controls
         document.getElementById('page-size-top').addEventListener('change', (e) => {
@@ -780,7 +785,11 @@ class StashShrinkApp {
             if (response.ok) {
                 this.showConversionSection();
                 this.startSSE();
-                this.updateQueuedSceneIds((await response.json()).queue || []);
+                const result = await response.json();
+                this.updateQueuedSceneIds(result.queue || []);
+                
+                // Start processing if not paused
+                this.startQueueProcessing();
                 this.showToast(`Queued ${this.selectedScenes.size} scenes for conversion.`, 'success');
             } else {
                 throw new Error('Failed to queue conversion');
@@ -791,12 +800,43 @@ class StashShrinkApp {
         }
     }
 
+    async toggleQueuePause() {
+        try {
+            const response = await fetch('/api/toggle-pause', { method: 'POST' });
+            if (response.ok) {
+                const result = await response.json();
+                this.isQueuePaused = result.paused;
+                this.updatePauseButton();
+                this.showToast(`Queue ${this.isQueuePaused ? 'paused' : 'resumed'}`, 'info');
+            }
+        } catch (error) {
+            console.error('Failed to toggle pause:', error);
+            this.showToast('Failed to toggle pause: ' + error.message, 'error');
+        }
+    }
+
+    updatePauseButton() {
+        const btn = document.getElementById('toggle-pause');
+        if (btn) {
+            btn.textContent = this.isQueuePaused ? 'Resume Queue' : 'Pause Queue';
+            btn.className = this.isQueuePaused ? 'btn btn-success' : 'btn btn-secondary';
+        }
+    }
+
+    startQueueProcessing() {
+        // Only start processing if queue is not paused
+        if (!this.isQueuePaused) {
+            fetch('/api/start-processing', { method: 'POST' });
+        }
+    }
+
     showConversionSection() {
         document.querySelector('.results-section').style.display = 'none';
         document.querySelector('.conversion-section').style.display = 'block';
         document.querySelector('.search-section').style.display = 'none';
         document.getElementById('show-search').style.display = 'inline-block';
         document.getElementById('show-conversion').style.display = 'none';
+        this.updatePauseButton();
         this.startSSE(); // Ensure SSE is running when viewing conversions
     }
 
@@ -837,6 +877,7 @@ class StashShrinkApp {
     }
 
     updateConversionStatus(statusData) {
+        this.isQueuePaused = statusData.paused || false;
         this.renderConversionTable(statusData.queue);
         this.updateQueuedSceneIds(statusData.queue);
         this.updateProgressOverview(statusData.queue, statusData.active);
@@ -861,6 +902,10 @@ class StashShrinkApp {
         if (clearCompletedBtn) {
             clearCompletedBtn.disabled = !(hasCompleted || hasErrors);
         }
+
+        // Update pause button state
+        this.updatePauseButton();
+        document.getElementById('toggle-pause').disabled = hasActiveOrPending && this.isQueuePaused;
 
         return { hasActiveOrPending, hasCompleted, hasErrors, hasAnyTasks: queue.length > 0 };
     }
@@ -1017,6 +1062,11 @@ class StashShrinkApp {
     async removeFromQueue(taskId) {
         // Implementation would depend on backend API
         alert('Remove from queue functionality to be implemented');
+        try {
+            await fetch(`/api/remove-from-queue/${taskId}`, { method: 'POST' });
+        } catch (error) {
+            console.error('Failed to remove from queue:', error);
+        }
     }
 
     // Utility functions

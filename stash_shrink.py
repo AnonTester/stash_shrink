@@ -48,7 +48,8 @@ DEFAULT_CONFIG = {
         "buffer_size": "2000k",
         "container": "mp4"
     },
-    "path_mappings": []
+    "path_mappings": [],
+    "paused": False
 }
 
 # Global state
@@ -68,6 +69,7 @@ class Settings(BaseModel):
     default_search_limit: int
     max_concurrent_tasks: int
     delete_original: bool
+    paused: bool = False
     video_settings: Dict[str, Any]
     path_mappings: List[str]
 
@@ -625,7 +627,8 @@ async def conversion_status():
     return {
         "queue": [task.dict() for task in conversion_queue],
         "active": list(active_tasks),
-        "completed": [task.dict() for task in conversion_queue if task.status in ["completed", "error"]]
+        "completed": [task.dict() for task in conversion_queue if task.status in ["completed", "error"]],
+        "paused": config.get('paused', False)
     }
 
 @app.post("/api/cancel-conversion/{task_id}")
@@ -696,15 +699,42 @@ async def cancel_all_conversions():
 
     return {"status": "cancelled", "count": cancelled_count}
 
+@app.post("/api/toggle-pause")
+async def toggle_pause():
+    config = get_config()
+    config['paused'] = not config.get('paused', False)
+    save_config(config)
+    return {"status": "ok", "paused": config['paused']}
+
+@app.post("/api/start-processing")
+async def start_processing():
+    """Start processing the queue if not paused"""
+    config = get_config()
+    if not config.get('paused', False) and conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
+        asyncio.create_task(process_conversion_queue())
+    return {"status": "processing_started"}
+
+@app.post("/api/remove-from-queue/{task_id}")
+async def remove_from_queue(task_id: str):
+    save_queue_state
+    conversion_queue = [task for task in conversion_queue if task.task_id != task_id]
+    save_queue_state()
+    return {"status": "removed"}
+
 async def process_conversion_queue():
     config = get_config()
-    
+
+    # Don't process if paused
+    if config.get('paused', False):
+        return
+
     while conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
         task = conversion_queue[0]
         if task.status == "pending":
             active_tasks.add(task.task_id)
             task.status = "processing"
             asyncio.create_task(convert_video(task))
+            save_queue_state()
         
         await asyncio.sleep(0.1)
 
@@ -1034,6 +1064,7 @@ async def sse_endpoint(request: Request):
                     "queue": serializable_queue,
                     "active": list(active_tasks)
                 }
+                status_data["paused"] = config.get('paused', False)
                 
                 yield f"data: {json.dumps(status_data)}\n\n"
                 await asyncio.sleep(1)
