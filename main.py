@@ -713,7 +713,6 @@ async def convert_video(task: ConversionTask):
         # Store the process in the task for potential cancellation
         task.process = process
         logger.info(f"FFmpeg process started with PID: {process.pid}")
-        )
         
         # Read stderr line by line to capture progress
         while True:
