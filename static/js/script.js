@@ -16,6 +16,12 @@ class StashShrinkApp {
 
         this.toastContainer = null;
         this.initializeToastSystem();
+
+        // Table sorting - initialize with data-sort-original attributes
+        document.querySelectorAll('#results-table th[data-sort-original]').forEach(th => {
+            const sortField = th.getAttribute('data-sort-original');
+            th.addEventListener('click', () => this.handleSort(sortField));
+        });
     }
 
     initializeToastSystem() {
@@ -359,20 +365,55 @@ class StashShrinkApp {
     }
 
     handleSort(field) {
+        // If clicking the same field, toggle direction
         if (this.sortField === field) {
             this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
         } else {
+            // New field, default to ascending
             this.sortField = field;
             this.sortDirection = 'asc';
         }
-
-        // Update table headers
+        
+        // Clear all sort indicators
         document.querySelectorAll('#results-table th[data-sort]').forEach(th => {
-            th.removeAttribute('data-sort-direction');
+            th.removeAttribute('data-sort');
+            th.setAttribute('data-sort', th.getAttribute('data-sort-original'));
         });
-        document.querySelector(`#results-table th[data-sort="${field}"]`).setAttribute('data-sort', this.sortDirection);
-
+        
+        // Set the current sort indicator
+        const currentTh = document.querySelector(`#results-table th[data-sort-original="${field}"]`);
+        if (currentTh) {
+            currentTh.setAttribute('data-sort', this.sortDirection);
+        }
+        
         this.renderResults();
+    }
+
+    // Update the getSortValue method to handle different data types properly
+    getSortValue(scene, field) {
+        const file = scene.files && scene.files.length > 0 ? scene.files[0] : null;
+        if (!file) return '';
+        
+        switch (field) {
+            case 'title': 
+                return scene.title || '';
+            case 'duration': 
+                return file.duration || 0;
+            case 'size': 
+                return file.size || 0;
+            case 'codec': 
+                return file.video_codec || '';
+            case 'width': 
+                return file.width || 0;
+            case 'height': 
+                return file.height || 0;
+            case 'bitrate': 
+                return file.bit_rate || 0;
+            case 'framerate': 
+                return file.frame_rate || 0;
+            default: 
+                return '';
+        }
     }
 
     toggleSceneSelection(sceneId, selected) {

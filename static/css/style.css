@@ -180,14 +180,39 @@ input, select {
     background-color: var(--hover-bg);
 }
 
+/* Improve table header sorting indicators */
+.data-table th[data-sort] {
+    position: relative;
+    cursor: pointer;
+    user-select: none;
+    padding-right: 20px;
+}
+
+.data-table th[data-sort]:hover {
+    background-color: var(--hover-bg);
+}
+
+.data-table th[data-sort]::after {
+    content: "↕";
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.8em;
+    opacity: 0.5;
+}
+
 .data-table th[data-sort="asc"]::after {
-    content: " ↑";
+    content: "↑";
+    opacity: 1;
 }
 
 .data-table th[data-sort="desc"]::after {
-    content: " ↓";
+    content: "↓";
+    opacity: 1;
 }
 
+/* Improve pagination layout */
 .pagination-controls {
     display: flex;
     justify-content: space-between;
@@ -195,12 +220,56 @@ input, select {
     padding: 1rem;
     background-color: var(--header-bg);
     border-radius: 0.375rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.pagination-controls > * {
+    margin: 0.25rem 0;
+}
+
+/* Ensure dropdown doesn't grow */
+#page-size {
+    width: 120px;
+    min-width: 120px;
+    flex-shrink: 0;
 }
 
 .pagination-buttons {
     display: flex;
     align-items: center;
     gap: 1rem;
+    flex-shrink: 0;
+}
+
+/* Improve checkbox alignment */
+.data-table td:first-child,
+.data-table th:first-child {
+    text-align: center;
+    width: 40px;
+}
+
+/* Make sure checkboxes are properly sized */
+.data-table input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+/* Improve responsive design */
+@media (max-width: 768px) {
+    .pagination-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .pagination-buttons {
+        justify-content: center;
+    }
+
+    #page-size {
+        width: 100%;
+    }
 }
 
 .progress-overview {
@@ -411,4 +480,68 @@ body.first-run header {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+/* Fix link colors in tables */
+.data-table a {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.data-table a:hover {
+    text-decoration: underline;
+    color: var(--primary-color);
+    opacity: 0.8;
+}
+
+/* Ensure links are visible in both themes */
+[data-theme="dark"] .data-table a {
+    color: #60a5fa; /* Lighter blue for dark theme */
+}
+
+[data-theme="dark"] .data-table a:hover {
+    color: #93c5fd;
+}
+
+/* Fix pagination dropdown width */
+#page-size {
+    width: 120px;
+    min-width: 120px;
+    flex: 0 0 auto;
+}
+
+.pagination-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background-color: var(--header-bg);
+    border-radius: 0.375rem;
+    gap: 1rem;
+}
+
+.pagination-buttons {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex: 0 0 auto;
+}
+
+/* Fix checkboxes */
+.data-table input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.data-table th input[type="checkbox"] {
+    margin: 0 auto;
+    display: block;
+}
+
+/* Style checkboxes better */
+input[type="checkbox"] {
+    accent-color: var(--primary-color);
 }
