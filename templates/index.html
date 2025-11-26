@@ -51,20 +51,53 @@
             </div>
             <button id="convert-videos" class="btn btn-primary">Convert Selected Videos</button>
         </div>
+        
+        <!-- Pagination Above Table -->
+        <div class="pagination-controls top-pagination">
+            <div class="pagination-left">
+                <select id="page-size-top">
+                    <option value="50">50 per page</option>
+                    <option value="100">100 per page</option>
+                    <option value="250">250 per page</option>
+                    <option value="500">500 per page</option>
+                    <option value="1000">1000 per page</option>
+                    <option value="all">All results</option>
+                </select>
+                <span id="results-count-top" class="results-count"></span>
+            </div>
+            
+            <div class="pagination-center">
+                <button id="first-page-top" class="btn btn-secondary pagination-btn" title="First Page">«</button>
+                <button id="prev-page-top" class="btn btn-secondary pagination-btn" title="Previous Page">‹</button>
+                
+                <div class="page-input-container">
+                    <span>Page</span>
+                    <input type="number" id="page-input-top" min="1" value="1" class="page-input">
+                    <span id="total-pages-top">of 1</span>
+                </div>
+                
+                <button id="next-page-top" class="btn btn-secondary pagination-btn" title="Next Page">›</button>
+                <button id="last-page-top" class="btn btn-secondary pagination-btn" title="Last Page">»</button>
+            </div>
+            
+            <div class="pagination-right">
+                <span id="page-info-top">Page 1 of 1</span>
+            </div>
+        </div>
 
         <div class="table-container">
             <table id="results-table" class="data-table">
                 <thead>
                     <tr>
                         <th><input type="checkbox" id="select-all-checkbox"></th>
-                        <th data-sort-original="title" data-sort="title">Title</th>
-                        <th data-sort-original="duration" data-sort="duration">Duration</th>
-                        <th data-sort-original="size" data-sort="size">File Size</th>
-                        <th data-sort-original="codec" data-sort="codec">Codec</th>
-                        <th data-sort-original="width" data-sort="width">Width</th>
-                        <th data-sort-original="height" data-sort="height">Height</th>
-                        <th data-sort-original="bitrate" data-sort="bitrate">Bitrate</th>
-                        <th data-sort-original="framerate" data-sort="framerate">FPS</th>
+                        <th data-sort-original="title">Title</th>
+                        <th data-sort-original="duration">Duration</th>
+                        <th data-sort-original="size">File Size</th>
+                        <th data-sort-original="codec">Codec</th>
+                        <th data-sort-original="width">Width</th>
+                        <th data-sort-original="height">Height</th>
+                        <th data-sort-original="bitrate">Bitrate</th>
+                        <th data-sort-original="framerate">FPS</th>
                         <th>Path</th>
                     </tr>
                 </thead>
@@ -72,19 +105,36 @@
             </table>
         </div>
 
-        <div class="pagination-controls">
-            <select id="page-size">
-                <option value="50">50</option>
-                <option value="100">100</option>
-                <option value="250">250</option>
-                <option value="500">500</option>
-                <option value="1000">1000</option>
-                <option value="all">All</option>
-            </select>
-            <div class="pagination-buttons">
-                <button id="prev-page" class="btn btn-secondary">Previous</button>
-                <span id="page-info">Page 1 of 1</span>
-                <button id="next-page" class="btn btn-secondary">Next</button>
+        <!-- Pagination Below Table (existing, updated) -->
+        <div class="pagination-controls bottom-pagination">
+            <div class="pagination-left">
+                <select id="page-size-bottom">
+                    <option value="50">50 per page</option>
+                    <option value="100">100 per page</option>
+                    <option value="250">250 per page</option>
+                    <option value="500">500 per page</option>
+                    <option value="1000">1000 per page</option>
+                    <option value="all">All results</option>
+                </select>
+                <span id="results-count-bottom" class="results-count"></span>
+            </div>
+
+            <div class="pagination-center">
+                <button id="first-page-bottom" class="btn btn-secondary pagination-btn" title="First Page">«</button>
+                <button id="prev-page-bottom" class="btn btn-secondary pagination-btn" title="Previous Page">‹</button>
+
+                <div class="page-input-container">
+                    <span>Page</span>
+                    <input type="number" id="page-input-bottom" min="1" value="1" class="page-input">
+                    <span id="total-pages-bottom">of 1</span>
+                </div>
+
+                <button id="next-page-bottom" class="btn btn-secondary pagination-btn" title="Next Page">›</button>
+                <button id="last-page-bottom" class="btn btn-secondary pagination-btn" title="Last Page">»</button>
+            </div>
+
+            <div class="pagination-right">
+                <span id="page-info-bottom">Page 1 of 1</span>
             </div>
         </div>
     </section>

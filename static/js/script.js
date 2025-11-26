@@ -5,23 +5,16 @@ class StashShrinkApp {
         this.currentPage = 1;
         this.pageSize = 50;
         this.sortField = null;
-        this.sortDirection = 'asc';
+        this.sortDirection = null;
         this.eventSource = null;
         this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
+        this.totalPages = 1;
 
         this.initializeTheme();
+        this.initializeToastSystem();
         this.initializeEventListeners();
         this.loadConfig();
         this.handleFirstRun();
-
-        this.toastContainer = null;
-        this.initializeToastSystem();
-
-        // Table sorting - initialize with data-sort-original attributes
-        document.querySelectorAll('#results-table th[data-sort-original]').forEach(th => {
-            const sortField = th.getAttribute('data-sort-original');
-            th.addEventListener('click', () => this.handleSort(sortField));
-        });
     }
 
     initializeToastSystem() {
@@ -93,7 +86,7 @@ class StashShrinkApp {
     }
 
     initializeEventListeners() {
-        // Settings modal - only if not first run
+        // Settings modal
         if (!this.isFirstRun) {
             document.getElementById('settings-btn').addEventListener('click', () => this.showSettingsModal());
             document.querySelector('#settings-modal .close').addEventListener('click', () => this.hideSettingsModal());
@@ -122,17 +115,48 @@ class StashShrinkApp {
         document.getElementById('cancel-all').addEventListener('click', () => this.cancelAllConversions());
         document.getElementById('clear-completed').addEventListener('click', () => this.clearCompleted());
 
-        // Pagination
-        document.getElementById('page-size').addEventListener('change', (e) => {
+        // Pagination - Top controls
+        document.getElementById('page-size-top').addEventListener('change', (e) => {
             this.pageSize = e.target.value === 'all' ? Infinity : parseInt(e.target.value);
+            this.currentPage = 1;
+            this.syncPaginationControls();
             this.renderResults();
         });
-        document.getElementById('prev-page').addEventListener('click', () => this.previousPage());
-        document.getElementById('next-page').addEventListener('click', () => this.nextPage());
 
-        // Table sorting
-        document.querySelectorAll('#results-table th[data-sort]').forEach(th => {
-            th.addEventListener('click', () => this.handleSort(th.dataset.sort));
+        document.getElementById('first-page-top').addEventListener('click', () => this.goToFirstPage());
+        document.getElementById('prev-page-top').addEventListener('click', () => this.previousPage());
+        document.getElementById('next-page-top').addEventListener('click', () => this.nextPage());
+        document.getElementById('last-page-top').addEventListener('click', () => this.goToLastPage());
+        document.getElementById('page-input-top').addEventListener('change', (e) => this.goToPage(parseInt(e.target.value)));
+        document.getElementById('page-input-top').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.goToPage(parseInt(e.target.value));
+            }
+        });
+
+        // Pagination - Bottom controls
+        document.getElementById('page-size-bottom').addEventListener('change', (e) => {
+            this.pageSize = e.target.value === 'all' ? Infinity : parseInt(e.target.value);
+            this.currentPage = 1;
+            this.syncPaginationControls();
+            this.renderResults();
+        });
+
+        document.getElementById('first-page-bottom').addEventListener('click', () => this.goToFirstPage());
+        document.getElementById('prev-page-bottom').addEventListener('click', () => this.previousPage());
+        document.getElementById('next-page-bottom').addEventListener('click', () => this.nextPage());
+        document.getElementById('last-page-bottom').addEventListener('click', () => this.goToLastPage());
+        document.getElementById('page-input-bottom').addEventListener('change', (e) => this.goToPage(parseInt(e.target.value)));
+        document.getElementById('page-input-bottom').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.goToPage(parseInt(e.target.value));
+            }
+        });
+
+        // Table sorting - initialize with proper event listeners
+        document.querySelectorAll('#results-table th[data-sort-original]').forEach(th => {
+            const sortField = th.getAttribute('data-sort-original');
+            th.addEventListener('click', () => this.handleSort(sortField));
         });
 
         // Close modals when clicking outside (only if not first run)
@@ -144,14 +168,103 @@ class StashShrinkApp {
                 }
             });
         }
-
-        // Prevent Escape key from closing modal during first run
+        // Prevent escape key on first run
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.isFirstRun) {
                 e.preventDefault();
                 return false;
             }
         });
+    }
+
+    // Enhanced pagination methods
+    goToFirstPage() {
+        if (this.currentPage > 1) {
+            this.currentPage = 1;
+            this.syncPaginationControls();
+            this.renderResults();
+        }
+    }
+
+    goToLastPage() {
+        if (this.currentPage < this.totalPages) {
+            this.currentPage = this.totalPages;
+            this.syncPaginationControls();
+            this.renderResults();
+        }
+    }
+
+    goToPage(page) {
+        if (page >= 1 && page <= this.totalPages && page !== this.currentPage) {
+            this.currentPage = page;
+            this.syncPaginationControls();
+            this.renderResults();
+        }
+    }
+
+    previousPage() {
+        if (this.currentPage > 1) {
+            this.currentPage--;
+            this.syncPaginationControls();
+            this.renderResults();
+        }
+    }
+
+    nextPage() {
+        if (this.currentPage < this.totalPages) {
+            this.currentPage++;
+            this.syncPaginationControls();
+            this.renderResults();
+        }
+    }
+
+    syncPaginationControls() {
+        const totalItems = this.currentResults.length;
+        this.totalPages = this.pageSize === Infinity ? 1 : Math.ceil(totalItems / this.pageSize);
+        
+        // Ensure current page is within bounds
+        if (this.currentPage > this.totalPages && this.totalPages > 0) {
+            this.currentPage = this.totalPages;
+        }
+        
+        // Update page size dropdowns
+        document.getElementById('page-size-top').value = this.pageSize === Infinity ? 'all' : this.pageSize.toString();
+        document.getElementById('page-size-bottom').value = this.pageSize === Infinity ? 'all' : this.pageSize.toString();
+        
+        // Update page inputs
+        document.getElementById('page-input-top').value = this.currentPage;
+        document.getElementById('page-input-bottom').value = this.currentPage;
+        
+        // Update total pages display
+        document.getElementById('total-pages-top').textContent = `of ${this.totalPages}`;
+        document.getElementById('total-pages-bottom').textContent = `of ${this.totalPages}`;
+        
+        // Update page info
+        document.getElementById('page-info-top').textContent = `Page ${this.currentPage} of ${this.totalPages}`;
+        document.getElementById('page-info-bottom').textContent = `Page ${this.currentPage} of ${this.totalPages}`;
+        
+        // Update results count
+        const resultsText = `${totalItems} result${totalItems !== 1 ? 's' : ''}`;
+        document.getElementById('results-count-top').textContent = resultsText;
+        document.getElementById('results-count-bottom').textContent = resultsText;
+        
+        // Update button states
+        const firstButtons = document.querySelectorAll('#first-page-top, #first-page-bottom');
+        const prevButtons = document.querySelectorAll('#prev-page-top, #prev-page-bottom');
+        const nextButtons = document.querySelectorAll('#next-page-top, #next-page-bottom');
+        const lastButtons = document.querySelectorAll('#last-page-top, #last-page-bottom');
+        
+        const isFirstPage = this.currentPage === 1;
+        const isLastPage = this.currentPage === this.totalPages || this.pageSize === Infinity;
+        
+        firstButtons.forEach(btn => btn.disabled = isFirstPage);
+        prevButtons.forEach(btn => btn.disabled = isFirstPage);
+        nextButtons.forEach(btn => btn.disabled = isLastPage);
+        lastButtons.forEach(btn => btn.disabled = isLastPage);
+        
+        // Update page input bounds
+        document.getElementById('page-input-top').max = this.totalPages;
+        document.getElementById('page-input-bottom').max = this.totalPages;
     }
 
     async loadConfig() {
@@ -250,81 +363,46 @@ class StashShrinkApp {
         }
     }
 
-    async handleSearch(e) {
-        e.preventDefault();
-
-        if (this.isFirstRun) {
-            this.showToast('Please complete the first-time setup by saving the configuration.', 'warning');
-            return;
-        }
-
-        const formData = new FormData(e.target);
-
-        try {
-            const searchParams = {};
-            for (let [key, value] of formData.entries()) {
-                if (value) searchParams[key] = value;
-            }
-
-            console.log('Searching with params:', searchParams);
-
-            const response = await fetch('/api/search', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(searchParams)
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
-            this.currentResults = data.scenes;
-            this.currentPage = 1;
-            this.selectedScenes.clear();
-            this.renderResults();
-            document.querySelector('.results-section').style.display = 'block';
-
-            this.showToast(`Found ${this.currentResults.length} scenes`, 'success');
-        } catch (error) {
-            console.error('Search failed:', error);
-            this.showToast('Search failed: ' + error.message, 'error');
-        }
-    }
-
     renderResults() {
         const tbody = document.querySelector('#results-table tbody');
+        if (!tbody) return;
+        
         tbody.innerHTML = '';
+        
+        if (!this.currentResults || this.currentResults.length === 0) {
+            const row = document.createElement('tr');
+            row.innerHTML = `<td colspan="10" style="text-align: center; padding: 2rem;">No scenes found</td>`;
+            tbody.appendChild(row);
+            this.syncPaginationControls();
+            return;
+        }
         
         let displayResults = [...this.currentResults];
         
-        // Sort results if sort is active
+        // Apply sorting if active
         if (this.sortField && this.sortDirection) {
             displayResults.sort((a, b) => {
-                let aVal = this.getSortValue(a, this.sortField);
-                let bVal = this.getSortValue(b, this.sortField);
+                const aVal = this.getSortValue(a, this.sortField);
+                const bVal = this.getSortValue(b, this.sortField);
                 
-                // Handle different data types
+                if (aVal === bVal) return 0;
+                
+                let result = 0;
                 if (typeof aVal === 'string') {
-                    aVal = aVal.toLowerCase();
-                    bVal = bVal.toLowerCase();
+                    result = aVal.localeCompare(bVal);
+                } else {
+                    result = aVal < bVal ? -1 : 1;
                 }
                 
-                if (this.sortDirection === 'asc') {
-                    return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
-                } else {
-                    return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
-                }
+                return this.sortDirection === 'desc' ? -result : result;
             });
         }
         
         // Paginate
-        const startIndex = (this.currentPage - 1) * this.pageSize;
-        const endIndex = Math.min(startIndex + this.pageSize, displayResults.length);
-        const pageResults = this.pageSize === Infinity ? displayResults : displayResults.slice(startIndex, endIndex);
+        const totalItems = displayResults.length;
+        const startIndex = this.pageSize === Infinity ? 0 : (this.currentPage - 1) * this.pageSize;
+        const endIndex = this.pageSize === Infinity ? totalItems : Math.min(startIndex + this.pageSize, totalItems);
+        const pageResults = displayResults.slice(startIndex, endIndex);
         
         pageResults.forEach(scene => {
             const file = scene.files && scene.files.length > 0 ? scene.files[0] : null;
@@ -333,9 +411,12 @@ class StashShrinkApp {
             const row = document.createElement('tr');
             const isSelected = this.selectedScenes.has(scene.id);
             
+            // Use title attribute for tooltips on title and path
             row.innerHTML = `
                 <td><input type="checkbox" class="scene-checkbox" value="${scene.id}" ${isSelected ? 'checked' : ''}></td>
-                <td><a href="${this.config.stash_url}/scenes/${scene.id}" target="_blank">${scene.title || 'Untitled'}</a></td>
+                <td class="title-cell" title="${scene.title || 'Untitled'}">
+                    <a href="${this.config.stash_url}/scenes/${scene.id}" target="_blank">${scene.title || 'Untitled'}</a>
+                </td>
                 <td>${this.formatDuration(file.duration)}</td>
                 <td>${this.formatFileSize(file.size)}</td>
                 <td>${file.video_codec || 'N/A'}</td>
@@ -343,7 +424,7 @@ class StashShrinkApp {
                 <td>${file.height || 'N/A'}</td>
                 <td>${this.formatBitrate(file.bit_rate)}</td>
                 <td>${file.frame_rate || 'N/A'}</td>
-                <td title="${file.path}">${this.truncatePath(file.path)}</td>
+                <td class="path-cell" title="${file.path}">${this.truncatePath(file.path)}</td>
             `;
             
             row.querySelector('.scene-checkbox').addEventListener('change', (e) => {
@@ -353,8 +434,55 @@ class StashShrinkApp {
             tbody.appendChild(row);
         });
         
-        this.updatePagination(displayResults.length);
+        this.syncPaginationControls();
         this.updateSelectionControls();
+    }
+
+    // Update the search handler to reset pagination
+    async handleSearch(e) {
+        e.preventDefault();
+        
+        if (this.isFirstRun) {
+            this.showToast('Please complete the first-time setup by saving the configuration.', 'warning');
+            return;
+        }
+        
+        const formData = new FormData(e.target);
+        
+        try {
+            const searchParams = {};
+            for (let [key, value] of formData.entries()) {
+                if (value) searchParams[key] = value;
+            }
+            
+            console.log('Searching with params:', searchParams);
+            
+            const response = await fetch('/api/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(searchParams)
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            this.currentResults = data.scenes;
+            this.currentPage = 1; // Reset to first page on new search
+            this.selectedScenes.clear();
+            this.syncPaginationControls();
+            this.renderResults();
+            document.querySelector('.results-section').style.display = 'block';
+            
+            this.showToast(`Found ${this.currentResults.length} scenes`, 'success');
+        } catch (error) {
+            console.error('Search failed:', error);
+            this.showToast('Search failed: ' + error.message, 'error');
+        }
     }
 
     getSortValue(scene, field) {
@@ -371,34 +499,38 @@ class StashShrinkApp {
         }
     }
 
+    
     handleSort(field) {
-        // If clicking the same field, cycle through states: asc -> desc -> none -> asc
+        console.log(`Sorting by ${field}, current field: ${this.sortField}, current direction: ${this.sortDirection}`);
+        
+        // If clicking the same field, cycle through states
         if (this.sortField === field) {
             if (this.sortDirection === 'asc') {
                 this.sortDirection = 'desc';
             } else if (this.sortDirection === 'desc') {
-                this.sortDirection = null;
+                // Third click: remove sorting
                 this.sortField = null;
-            } else {
-                this.sortDirection = 'asc';
+                this.sortDirection = null;
             }
         } else {
-            // New field, start with ascending
+            // New field: start with ascending
             this.sortField = field;
             this.sortDirection = 'asc';
         }
+        
+        console.log(`New state - field: ${this.sortField}, direction: ${this.sortDirection}`);
         
         this.updateSortIndicators();
         this.renderResults();
     }
 
     updateSortIndicators() {
-        // Clear all sort indicators
+        // Remove all sort indicators first
         document.querySelectorAll('#results-table th[data-sort-original]').forEach(th => {
             th.removeAttribute('data-sort');
         });
         
-        // Set indicator for current sort field
+        // Add indicator for current sort field if active
         if (this.sortField && this.sortDirection) {
             const currentTh = document.querySelector(`#results-table th[data-sort-original="${this.sortField}"]`);
             if (currentTh) {
@@ -406,6 +538,7 @@ class StashShrinkApp {
             }
         }
     }
+
 
     // Update the getSortValue method to handle different data types properly
     getSortValue(scene, field) {
