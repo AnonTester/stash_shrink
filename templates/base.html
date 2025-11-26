@@ -76,10 +76,25 @@
                     </div>
 
                     <div class="form-section">
+                        <h3>Path Mappings</h3>
+                        <div class="form-group">
+                            <label>Docker to Host Path Mappings (one per line, format: docker_path:host_path):</label>
+                            <textarea id="path_mappings" name="path_mappings" rows="4" placeholder="/data:/home/user/stash&#10;/media:/mnt/external"></textarea>
+                            <small>
+                                Used to convert between Docker container paths and host system paths for file operations.
+                            </small>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
                         <h3>Conversion Settings</h3>
                         <div class="form-group">
                             <label for="max_concurrent_tasks">Max Concurrent Tasks:</label>
                             <input type="number" id="max_concurrent_tasks" name="max_concurrent_tasks" value="2" min="1" max="10">
+                        </div>
+                        <div class="form-group">
+                            <input type="checkbox" id="delete_original" name="delete_original" checked>
+                            <label for="delete_original" style="display: inline-block; margin-left: 0.5rem;">Delete original file after successful conversion</label>
                         </div>
                     </div>
 

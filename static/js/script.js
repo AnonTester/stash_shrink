@@ -101,6 +101,9 @@ class StashShrinkApp {
         // Search form
         document.getElementById('search-form').addEventListener('submit', (e) => this.handleSearch(e));
 
+        // Use video settings button
+        document.getElementById('use-video-settings').addEventListener('click', () => this.useVideoSettings());
+        
         // Selection controls
         document.getElementById('select-all').addEventListener('click', () => this.selectAll());
         document.getElementById('select-none').addEventListener('click', () => this.selectNone());
@@ -300,6 +303,14 @@ class StashShrinkApp {
         form.default_search_limit.value = this.config.default_search_limit || 50;
         form.max_concurrent_tasks.value = this.config.max_concurrent_tasks || 2;
 
+        // Populate path mappings
+        const pathMappings = this.config.path_mappings || [];
+        form.path_mappings.value = pathMappings.join('\n');
+
+        // Populate delete original setting
+        const deleteOriginal = this.config.delete_original !== false; // default to true
+        form.delete_original.checked = deleteOriginal;
+
         const videoSettings = this.config.video_settings || {};
         form.width.value = videoSettings.width || '';
         form.height.value = videoSettings.height || '';
@@ -307,6 +318,19 @@ class StashShrinkApp {
         form.framerate.value = videoSettings.framerate || '';
         form.buffer_size.value = videoSettings.buffer_size || '';
         form.container.value = videoSettings.container || '';
+    }
+
+    useVideoSettings() {
+        if (!this.config || !this.config.video_settings) {
+            this.showToast('Video settings not available', 'warning');
+            return;
+        }
+        
+        const videoSettings = this.config.video_settings;
+        document.getElementById('max_width').value = videoSettings.width || '';
+        document.getElementById('max_height').value = videoSettings.height || '';
+        document.getElementById('max_bitrate').value = videoSettings.bitrate || '';
+        document.getElementById('max_framerate').value = videoSettings.framerate || '';
     }
 
     async saveSettings(formData) {
@@ -318,6 +342,8 @@ class StashShrinkApp {
                 api_key: formData.get('api_key'),
                 default_search_limit: parseInt(formData.get('default_search_limit')) || 50,
                 max_concurrent_tasks: parseInt(formData.get('max_concurrent_tasks')) || 2,
+                delete_original: formData.get('delete_original') === 'on',
+                path_mappings: formData.get('path_mappings') ? formData.get('path_mappings').split('\n').filter(m => m.trim()) : [],
                 video_settings: {
                     width: parseInt(formData.get('width')) || 1280,
                     height: parseInt(formData.get('height')) || 720,

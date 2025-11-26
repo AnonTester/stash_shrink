@@ -92,6 +92,11 @@ h1, h2, h3 {
     transform: translateY(-1px);
 }
 
+.form-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
 .form-section {
     margin-bottom: 1.5rem;
     padding: 1rem;
@@ -130,6 +135,25 @@ input, select {
     padding: 1.5rem;
     border-radius: 0.5rem;
     border: 1px solid var(--border-color);
+}
+
+textarea {
+    width: 100%;
+    min-height: 100px;
+    font-family: monospace;
+    resize: vertical;
+}
+
+.form-group small {
+    display: block;
+    margin-top: 0.25rem;
+    color: var(--secondary-color);
+    font-size: 0.875rem;
+}
+
+/* Inline checkbox labels */
+.form-group input[type="checkbox"] {
+    width: auto;
 }
 
 .results-controls, .conversion-controls {
