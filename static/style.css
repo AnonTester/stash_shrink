@@ -517,7 +517,7 @@ input, select {
 .conversion-section .data-table td:nth-child(1) {
     width: auto; /* Title - flexible width */
     min-width: 200px;
-    max-width: none;    
+    max-width: none;
 }
 
 .conversion-section .data-table th:nth-child(2),
@@ -525,14 +525,14 @@ input, select {
     width: 140px; /* Status - fixed width */
     min-width: 140px;
     max-width: 140px;
-    text-align: center;    
+    text-align: center;
 }
 
 .conversion-section .data-table th:nth-child(3),
 .conversion-section .data-table td:nth-child(3) {
     width: auto; /* Progress - flexible width */
     min-width: 250px;
-    max-width: none;    
+    max-width: none;
 }
 
 .conversion-section .data-table th:nth-child(4),
@@ -543,7 +543,7 @@ input, select {
     text-align: right;
 }
 
-+/* Conversion table specific styling */
+/* Conversion table specific styling */
 .conversion-actions {
     text-align: right !important;
 }
@@ -770,6 +770,19 @@ body.first-run header {
     white-space: pre-wrap;
 }
 
+/* Section visibility control */
+.search-section {
+    display: block;
+}
+
+.results-section {
+    display: none; /* Hidden by default, shown when there are results */
+}
+
+.conversion-section {
+    display: none; /* Hidden by default */
+}
+
 /* Responsive design */
 @media (max-width: 1200px) {
     .data-table th:nth-child(2),
@@ -824,7 +837,7 @@ body.first-run header {
     }
 
     .search-form .form-row .form-group {
-        margin-bottom: 0;        
+        margin-bottom: 0;
     }
 
     .results-controls,
@@ -876,7 +889,7 @@ body.first-run header {
     }
 
     .search-form .form-row {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr 1fr;
     }
 }
 
@@ -891,7 +904,7 @@ body.first-run header {
 @media (min-width: 1024px) {
     .search-form .form-row {
         grid-template-columns: 1fr 1fr 1fr;
-        gap: 1rem;        
+        gap: 1rem;
     }
 }
 

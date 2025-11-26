@@ -624,6 +624,7 @@ async def queue_conversion(scene_ids: List[str]):
 
 @app.get("/api/conversion-status")
 async def conversion_status():
+    config = get_config()
     return {
         "queue": [task.dict() for task in conversion_queue],
         "active": list(active_tasks),
@@ -716,10 +717,17 @@ async def start_processing():
 
 @app.post("/api/remove-from-queue/{task_id}")
 async def remove_from_queue(task_id: str):
-    save_queue_state
-    conversion_queue = [task for task in conversion_queue if task.task_id != task_id]
+    global conversion_queue
+    tasks_to_keep = [task for task in conversion_queue if str(task.task_id) != str(task_id)]
+    removed_count = len(conversion_queue) - len(tasks_to_keep)
+    conversion_queue = tasks_to_keep
+
+    # Also remove from task_status
+    if task_id in task_status:
+        del task_status[task_id]
+
     save_queue_state()
-    return {"status": "removed"}
+    return {"status": "removed", "count": removed_count}
 
 async def process_conversion_queue():
     config = get_config()
@@ -1060,12 +1068,13 @@ async def sse_endpoint(request: Request):
                     }
                     serializable_queue.append(task_data)
                 
+                current_config = get_config()
                 status_data = {
                     "queue": serializable_queue,
-                    "active": list(active_tasks)
+                    "active": list(active_tasks),
+                    "paused": current_config.get('paused', False)
                 }
-                status_data["paused"] = config.get('paused', False)
-                
+
                 yield f"data: {json.dumps(status_data)}\n\n"
                 await asyncio.sleep(1)
         finally:
@@ -1088,4 +1097,4 @@ def convert_bitrate_to_bps(bitrate_str: str) -> int:
     return int(bitrate_str) if bitrate_str else 0
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=9899, reload=True)
+    uvicorn.run("stash_shrink:app", host="0.0.0.0", port=9899, reload=True)

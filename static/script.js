@@ -9,7 +9,7 @@ class StashShrinkApp {
         this.eventSource = null;
         this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
         this.handleFirstRun();
-        this.queuedSceneIds = new Set();        
+        this.queuedSceneIds = new Set();
         this.isQueuePaused = false;
         this.totalPages = 1;
 
@@ -36,11 +36,12 @@ class StashShrinkApp {
             this.updateQueuedSceneIds(statusData.queue);
 
             const hasQueueItems = statusData.queue && statusData.queue.length > 0;
-            
+
+            // Always start with search section
+            this.showSearchSection();
+
             if (hasQueueItems) {
-                this.showConversionSection();
-            } else {
-                this.showSearchSection();
+                document.getElementById('show-conversion').style.display = 'inline-block';
             }
         } catch (error) {
             console.error('Failed to load initial conversion status:', error);
@@ -50,9 +51,11 @@ class StashShrinkApp {
 
     updateQueuedSceneIds(queue) {
         this.queuedSceneIds.clear();
-        queue.forEach(task => this.queuedSceneIds.add(task.scene.id));
-        this.renderResults(); // Update checkboxes if results are displayed        
-    }        
+        if (queue) {
+            queue.forEach(task => this.queuedSceneIds.add(task.scene.id));
+        }
+        this.renderResults(); // Update checkboxes if results are displayed
+    }
 
     initializeToastSystem() {
         this.toastContainer = document.createElement('div');
@@ -140,11 +143,11 @@ class StashShrinkApp {
 
         // Use video settings button
         document.getElementById('use-video-settings').addEventListener('click', () => this.useVideoSettings());
-        
+
         // Section navigation
         document.getElementById('show-search').addEventListener('click', () => this.showSearchSection());
         document.getElementById('show-conversion').addEventListener('click', () => this.showConversionSection());
-        
+
         // Selection controls
         document.getElementById('select-all').addEventListener('click', () => this.selectAll());
         document.getElementById('select-none').addEventListener('click', () => this.selectNone());
@@ -228,7 +231,6 @@ class StashShrinkApp {
             this.currentPage = 1;
             this.syncPaginationControls();
             this.renderResults();
-            this.updateSearchSectionVisibility();
         }
     }
 
@@ -267,47 +269,47 @@ class StashShrinkApp {
     syncPaginationControls() {
         const totalItems = this.currentResults.length;
         this.totalPages = this.pageSize === Infinity ? 1 : Math.ceil(totalItems / this.pageSize);
-        
+
         // Ensure current page is within bounds
         if (this.currentPage > this.totalPages && this.totalPages > 0) {
             this.currentPage = this.totalPages;
         }
-        
+
         // Update page size dropdowns
         document.getElementById('page-size-top').value = this.pageSize === Infinity ? 'all' : this.pageSize.toString();
         document.getElementById('page-size-bottom').value = this.pageSize === Infinity ? 'all' : this.pageSize.toString();
-        
+
         // Update page inputs
         document.getElementById('page-input-top').value = this.currentPage;
         document.getElementById('page-input-bottom').value = this.currentPage;
-        
+
         // Update total pages display
         document.getElementById('total-pages-top').textContent = `of ${this.totalPages}`;
         document.getElementById('total-pages-bottom').textContent = `of ${this.totalPages}`;
-        
+
         // Update page info
         document.getElementById('page-info-top').textContent = `Page ${this.currentPage} of ${this.totalPages}`;
         document.getElementById('page-info-bottom').textContent = `Page ${this.currentPage} of ${this.totalPages}`;
-        
+
         // Update results count
         const resultsText = `${totalItems} result${totalItems !== 1 ? 's' : ''}`;
         document.getElementById('results-count-top').textContent = resultsText;
         document.getElementById('results-count-bottom').textContent = resultsText;
-        
+
         // Update button states
         const firstButtons = document.querySelectorAll('#first-page-top, #first-page-bottom');
         const prevButtons = document.querySelectorAll('#prev-page-top, #prev-page-bottom');
         const nextButtons = document.querySelectorAll('#next-page-top, #next-page-bottom');
         const lastButtons = document.querySelectorAll('#last-page-top, #last-page-bottom');
-        
+
         const isFirstPage = this.currentPage === 1;
         const isLastPage = this.currentPage === this.totalPages || this.pageSize === Infinity;
-        
+
         firstButtons.forEach(btn => btn.disabled = isFirstPage);
         prevButtons.forEach(btn => btn.disabled = isFirstPage);
         nextButtons.forEach(btn => btn.disabled = isLastPage);
         lastButtons.forEach(btn => btn.disabled = isLastPage);
-        
+
         // Update page input bounds
         document.getElementById('page-input-top').max = this.totalPages;
         document.getElementById('page-input-bottom').max = this.totalPages;
@@ -368,7 +370,7 @@ class StashShrinkApp {
             this.showToast('Video settings not available', 'warning');
             return;
         }
-        
+
         const videoSettings = this.config.video_settings;
         document.getElementById('max_width').value = videoSettings.width || '';
         document.getElementById('max_height').value = videoSettings.height || '';
@@ -379,7 +381,7 @@ class StashShrinkApp {
     async saveSettings(formData) {
         try {
             console.log('Saving settings...');
-            
+
             const settings = {
                 stash_url: formData.get('stash_url'),
                 api_key: formData.get('api_key'),
@@ -396,9 +398,9 @@ class StashShrinkApp {
                     container: formData.get('container') || 'mp4'
                 }
             };
-            
+
             console.log('Sending settings:', settings);
-            
+
             const response = await fetch('/api/config', {
                 method: 'POST',
                 headers: {
@@ -406,17 +408,17 @@ class StashShrinkApp {
                 },
                 body: JSON.stringify(settings)
             });
-            
+
             if (response.ok) {
                 this.config = settings;
-                
+
                 if (this.isFirstRun) {
                     this.isFirstRun = false;
                     document.body.classList.remove('first-run');
                     document.getElementById('settings-btn').style.display = 'block';
                     document.getElementById('settings-modal').classList.remove('first-run');
                     document.getElementById('settings-modal').style.display = 'none';
-                    
+
                     this.showToast('Configuration saved successfully! You can now use Stash Shrink.', 'success');
                 } else {
                     this.hideSettingsModal();
@@ -436,61 +438,63 @@ class StashShrinkApp {
         const tbody = document.querySelector('#results-table tbody');
         const tableContainer = document.querySelector('.table-container');
         const paginationControls = document.querySelectorAll('.pagination-controls');
-        const resultsControls = document.querySelector('.results-controls');        
-        
+        const resultsControls = document.querySelector('.results-controls');
+        const resultsSection = document.querySelector('.results-section');
+
         tbody.innerHTML = '';
-        
+
         if (!this.currentResults || this.currentResults.length === 0) {
-            // Hide table and controls when no results
+            // Hide entire results section when no results
+            if (resultsSection) resultsSection.style.display = 'none';
             if (tableContainer) tableContainer.style.display = 'none';
             paginationControls.forEach(control => control.style.display = 'none');
             if (resultsControls) resultsControls.style.display = 'none';
-            
-            // Show "no results" message
+
+            // Show "no results" message in table only (no toast)
             const noResultsRow = document.createElement('tr');
             noResultsRow.innerHTML = `<td colspan="10" style="text-align: center; padding: 2rem; color: var(--secondary-color);">No scenes found matching your search criteria</td>`;
             tbody.appendChild(noResultsRow);
-            this.updateSearchSectionVisibility();
             this.syncPaginationControls();
             return;
         }
 
-        // Show table and controls when there are results
+        // Show results section when there are results
+        if (resultsSection) resultsSection.style.display = 'block';
         if (tableContainer) tableContainer.style.display = 'block';
         paginationControls.forEach(control => control.style.display = 'flex');
         if (resultsControls) resultsControls.style.display = 'flex';
-        
+
         let displayResults = [...this.currentResults];
-        
+
         // Apply sorting if active
         if (this.sortField && this.sortDirection) {
             displayResults.sort((a, b) => {
                 const aVal = this.getSortValue(a, this.sortField);
                 const bVal = this.getSortValue(b, this.sortField);
-                
+
                 if (aVal === bVal) return 0;
-                
+
                 let result = 0;
                 if (typeof aVal === 'string') {
                     result = aVal.localeCompare(bVal);
                 } else {
                     result = aVal < bVal ? -1 : 1;
                 }
-                
+
                 return this.sortDirection === 'desc' ? -result : result;
             });
         }
-        
+
         // Paginate
         const totalItems = displayResults.length;
         const startIndex = this.pageSize === Infinity ? 0 : (this.currentPage - 1) * this.pageSize;
         const endIndex = this.pageSize === Infinity ? totalItems : Math.min(startIndex + this.pageSize, totalItems);
         const pageResults = displayResults.slice(startIndex, endIndex);
-        
+
         pageResults.forEach(scene => {
             const file = scene.files && scene.files.length > 0 ? scene.files[0] : null;
             if (!file) return;
-            
+
             const isQueued = this.queuedSceneIds.has(scene.id);
             const isSelected = this.selectedScenes.has(scene.id) && !isQueued;
             const checkboxDisabled = isQueued ? 'disabled' : '';
@@ -499,8 +503,8 @@ class StashShrinkApp {
 
             row.innerHTML = `
                  <td>
-                    <input type="checkbox" class="scene-checkbox" value="${scene.id}" 
-                           ${isSelected ? 'checked' : ''} 
+                    <input type="checkbox" class="scene-checkbox" value="${scene.id}"
+                           ${isSelected ? 'checked' : ''}
                            ${checkboxDisabled}
                            ${isQueued ? 'title="Already in conversion queue"' : ''}>
                     ${isQueued ? '<div style="font-size:10px;color:var(--success-color);">Queued</div>' : ''}
@@ -517,39 +521,38 @@ class StashShrinkApp {
                 <td>${file.frame_rate || 'N/A'}</td>
                 <td class="path-cell" title="${file.path}">${this.truncatePath(file.path)}</td>
             `;
-            
+
             row.querySelector('.scene-checkbox').addEventListener('change', (e) => {
                 this.toggleSceneSelection(scene.id, e.target.checked);
             });
-            
+
             if (isQueued) row.style.opacity = '0.7';
 
             tbody.appendChild(row);
         });
-        
+
         this.syncPaginationControls();
         this.updateSelectionControls();
     }
 
-    // Update the search handler to reset pagination
     async handleSearch(e) {
         e.preventDefault();
-        
+
         if (this.isFirstRun) {
             this.showToast('Please complete the first-time setup by saving the configuration.', 'warning');
             return;
         }
-        
+
         const formData = new FormData(e.target);
-        
+
         try {
             const searchParams = {};
             for (let [key, value] of formData.entries()) {
                 if (value) searchParams[key] = value;
             }
-            
+
             console.log('Searching with params:', searchParams);
-            
+
             const response = await fetch('/api/search', {
                 method: 'POST',
                 headers: {
@@ -557,46 +560,34 @@ class StashShrinkApp {
                 },
                 body: JSON.stringify(searchParams)
             });
-            
+
             if (!response.ok) {
                 const errorData = await response.json();
                 throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
             }
-            
+
             const data = await response.json();
             this.currentResults = data.scenes;
             this.currentPage = 1; // Reset to first page on new search
             this.selectedScenes.clear();
             this.syncPaginationControls();
-            this.updateSearchSectionVisibility();
             this.renderResults();
-            
-            this.showToast(`Found ${this.currentResults.length} scenes`, 'success');
-            this.updateSearchSectionVisibility();
+
+            // Show appropriate message based on results
+            if (this.currentResults.length === 0) {
+                this.showToast('No scenes found matching your search criteria', 'info');
+            } else {
+                this.showToast(`Found ${this.currentResults.length} scenes`, 'success');
+            }
         } catch (error) {
             console.error('Search failed:', error);
             this.showToast('Search failed: ' + error.message, 'error');
         }
     }
 
-    getSortValue(scene, field) {
-        switch (field) {
-            case 'title': return scene.title || '';
-            case 'duration': return scene.file.duration;
-            case 'size': return scene.file.size;
-            case 'codec': return scene.file.video_codec;
-            case 'width': return scene.file.width;
-            case 'height': return scene.file.height;
-            case 'bitrate': return scene.file.bit_rate;
-            case 'framerate': return scene.file.frame_rate;
-            default: return '';
-        }
-    }
-
-    
     handleSort(field) {
         console.log(`Sorting by ${field}, current field: ${this.sortField}, current direction: ${this.sortDirection}`);
-        
+
         // If clicking the same field, cycle through states
         if (this.sortField === field) {
             if (this.sortDirection === 'asc') {
@@ -611,9 +602,9 @@ class StashShrinkApp {
             this.sortField = field;
             this.sortDirection = 'asc';
         }
-        
+
         console.log(`New state - field: ${this.sortField}, direction: ${this.sortDirection}`);
-        
+
         this.updateSortIndicators();
         this.renderResults();
     }
@@ -623,7 +614,7 @@ class StashShrinkApp {
         document.querySelectorAll('#results-table th[data-sort-original]').forEach(th => {
             th.removeAttribute('data-sort');
         });
-        
+
         // Add indicator for current sort field if active
         if (this.sortField && this.sortDirection) {
             const currentTh = document.querySelector(`#results-table th[data-sort-original="${this.sortField}"]`);
@@ -633,30 +624,28 @@ class StashShrinkApp {
         }
     }
 
-
-    // Update the getSortValue method to handle different data types properly
     getSortValue(scene, field) {
         const file = scene.files && scene.files.length > 0 ? scene.files[0] : null;
         if (!file) return '';
-        
+
         switch (field) {
-            case 'title': 
+            case 'title':
                 return scene.title || '';
-            case 'duration': 
+            case 'duration':
                 return file.duration || 0;
-            case 'size': 
+            case 'size':
                 return file.size || 0;
-            case 'codec': 
+            case 'codec':
                 return file.video_codec || '';
-            case 'width': 
+            case 'width':
                 return file.width || 0;
-            case 'height': 
+            case 'height':
                 return file.height || 0;
-            case 'bitrate': 
+            case 'bitrate':
                 return file.bit_rate || 0;
-            case 'framerate': 
+            case 'framerate':
                 return file.frame_rate || 0;
-            default: 
+            default:
                 return '';
         }
     }
@@ -676,9 +665,7 @@ class StashShrinkApp {
             !this.queuedSceneIds.has(id)
         );
         currentPageScenes.forEach(id => this.selectedScenes.add(id));
-        const currentPageScenes = this.getCurrentPageSceneIds();
-        currentPageScenes.forEach(id => this.selectedScenes.add(id));
-        this.renderResults();
+        this.updateSelectionControls();
     }
 
     selectNone() {
@@ -740,39 +727,17 @@ class StashShrinkApp {
         document.getElementById('select-all-checkbox').indeterminate = selectedCount > 0 && !allSelected;
     }
 
-    updatePagination(totalItems) {
-        const totalPages = this.pageSize === Infinity ? 1 : Math.ceil(totalItems / this.pageSize);
-        document.getElementById('page-info').textContent = `Page ${this.currentPage} of ${totalPages}`;
-        document.getElementById('prev-page').disabled = this.currentPage === 1;
-        document.getElementById('next-page').disabled = this.currentPage === totalPages || this.pageSize === Infinity;
-    }
-
-    previousPage() {
-        if (this.currentPage > 1) {
-            this.currentPage--;
-            this.renderResults();
-        }
-    }
-
-    nextPage() {
-        const totalPages = Math.ceil(this.currentResults.length / this.pageSize);
-        if (this.currentPage < totalPages) {
-            this.currentPage++;
-            this.renderResults();
-        }
-    }
-
     async queueConversion() {
         if (this.isFirstRun) {
             this.showToast('Please complete the first-time setup by saving the configuration.', 'warning');
             return;
         }
-        
+
         if (this.selectedScenes.size === 0) {
             this.showToast('Please select at least one scene to convert.', 'warning');
             return;
         }
-        
+
         try {
             const response = await fetch('/api/queue-conversion', {
                 method: 'POST',
@@ -781,15 +746,15 @@ class StashShrinkApp {
                 },
                 body: JSON.stringify(Array.from(this.selectedScenes))
             });
-            
+
             if (response.ok) {
                 this.showConversionSection();
                 this.startSSE();
-                const result = await response.json();
-                this.updateQueuedSceneIds(result.queue || []);
-                
+                const responseData = await response.json();
+                this.updateQueuedSceneIds(responseData.queue || []);
+
                 // Start processing if not paused
-                this.startQueueProcessing();
+                if (!this.isQueuePaused) this.startQueueProcessing();
                 this.showToast(`Queued ${this.selectedScenes.size} scenes for conversion.`, 'success');
             } else {
                 throw new Error('Failed to queue conversion');
@@ -804,7 +769,7 @@ class StashShrinkApp {
         try {
             const response = await fetch('/api/toggle-pause', { method: 'POST' });
             if (response.ok) {
-                const result = await response.json();
+                const result = await response.json().catch(() => ({}));
                 this.isQueuePaused = result.paused;
                 this.updatePauseButton();
                 this.showToast(`Queue ${this.isQueuePaused ? 'paused' : 'resumed'}`, 'info');
@@ -826,7 +791,12 @@ class StashShrinkApp {
     startQueueProcessing() {
         // Only start processing if queue is not paused
         if (!this.isQueuePaused) {
-            fetch('/api/start-processing', { method: 'POST' });
+            fetch('/api/start-processing', { method: 'POST' })
+                .catch(error => {
+                    console.error('Failed to start queue processing:', error);
+                });
+        } else {
+            console.log('Queue processing paused, not starting new tasks');
         }
     }
 
@@ -834,10 +804,12 @@ class StashShrinkApp {
         document.querySelector('.results-section').style.display = 'none';
         document.querySelector('.conversion-section').style.display = 'block';
         document.querySelector('.search-section').style.display = 'none';
+
         document.getElementById('show-search').style.display = 'inline-block';
         document.getElementById('show-conversion').style.display = 'none';
+
         this.updatePauseButton();
-        this.startSSE(); // Ensure SSE is running when viewing conversions
+        this.startSSE();
     }
 
     showSearchSection() {
@@ -845,7 +817,10 @@ class StashShrinkApp {
         document.querySelector('.search-section').style.display = 'block';
         document.querySelector('.conversion-section').style.display = 'none';
         document.getElementById('show-search').style.display = 'none';
-        document.getElementById('show-conversion').style.display = 'inline-block';        
+        document.getElementById('show-conversion').style.display = 'inline-block';
+
+        // Update results section visibility based on current results
+        this.updateSearchSectionVisibility();
     }
 
     startSSE() {
@@ -853,7 +828,7 @@ class StashShrinkApp {
         if (this.eventSource && this.eventSource.readyState !== EventSource.CLOSED) {
             return;
         }
-                
+
         if (this.eventSource) {
             this.eventSource.close();
         }
@@ -872,7 +847,7 @@ class StashShrinkApp {
                 console.error('SSE error:', error);
                 // Attempt to reconnect after 5 seconds
                 setTimeout(() => this.startSSE(), 5000);
-            }            
+            }
         };
     }
 
@@ -885,18 +860,18 @@ class StashShrinkApp {
     }
 
     updateButtonStates(queue) {
-        const hasActiveOrPending = queue.some(task => 
+        const hasActiveOrPending = queue.some(task =>
             task.status === 'processing' || task.status === 'pending'
         );
         const hasCompleted = queue.some(task => task.status === 'completed');
         const hasErrors = queue.some(task => task.status === 'error');
-        
+
         // Update Cancel All button
         const cancelAllBtn = document.getElementById('cancel-all');
         if (cancelAllBtn) {
             cancelAllBtn.disabled = !hasActiveOrPending;
         }
-        
+
         // Update Clear Completed button
         const clearCompletedBtn = document.getElementById('clear-completed');
         if (clearCompletedBtn) {
@@ -914,27 +889,38 @@ class StashShrinkApp {
         const buttonStates = this.updateButtonStates(queue);
         const hasAnyTasks = buttonStates.hasAnyTasks;
 
-        // Show/hide conversion section based on whether there are any tasks
-        const conversionSection = document.querySelector('.conversion-section');
-        if (conversionSection) {
-            conversionSection.style.display = hasAnyTasks ? 'block' : 'none';
+        // Show conversion button if there are tasks
+        if (hasAnyTasks) {
+            document.getElementById('show-conversion').style.display = 'inline-block';
         }
-
-        this.updateSearchSectionVisibility();
     }
-    
+
     renderConversionTable(queue) {
         const tbody = document.querySelector('#conversion-table tbody');
+        const tableContainer = document.querySelector('.conversion-section .table-container');
         tbody.innerHTML = '';
+
+        if (!queue || queue.length === 0) {
+            // Hide table when no queue items
+            if (tableContainer) tableContainer.style.display = 'none';
+            // Show empty message
+            const emptyRow = document.createElement('tr');
+            emptyRow.innerHTML = `<td colspan="4" style="text-align: center; padding: 2rem; color: var(--secondary-color);">No conversion tasks in queue</td>`;
+            tbody.appendChild(emptyRow);
+            return;
+        }
+
+        // Show table when there are queue items
+        if (tableContainer) tableContainer.style.display = 'block';
 
         queue.forEach(task => {
             const row = document.createElement('tr');
             const sceneTitle = task.scene.title || 'Untitled';
             const isError = task.status === 'error';
-            const fileName = task.scene.files && task.scene.files.length > 0 ? 
+            const fileName = task.scene.files && task.scene.files.length > 0 ?
                 task.scene.files[0].basename : 'Unknown file';
-            const etaText = task.eta && task.eta > 0 ? this.formatTime(task.eta) : 'Calculating...';            
-                        
+            const etaText = task.eta && task.eta > 0 ? this.formatTime(task.eta) : 'Calculating...';
+
             row.innerHTML = `
                 <td class="conversion-title">
                     <div><strong>${sceneTitle}</strong></div>
@@ -953,13 +939,13 @@ class StashShrinkApp {
                 <td class="conversion-actions">
                     ${task.status === 'error' ?
                         `<button class="btn btn-secondary btn-sm" onclick="app.showLog('${task.task_id}')">Log</button>
-                         <button class="btn btn-primary btn-sm" onclick="app.retryConversion('${task.task_id}')">Retry</button>` : 
+                         <button class="btn btn-primary btn-sm" onclick="app.retryConversion('${task.task_id}')">Retry</button>` :
                         ''}
                     ${task.status === 'pending' || task.status === 'processing' ?
-                        `<button class="btn btn-danger btn-sm" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` : 
+                        `<button class="btn btn-danger btn-sm" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` :
                         ''}
                     ${task.status === 'completed' ?
-                        `<button class="btn btn-secondary btn-sm" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` : 
+                        `<button class="btn btn-secondary btn-sm" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` :
                         ''}
                 </td>
             `;
@@ -987,27 +973,24 @@ class StashShrinkApp {
             const maxEta = Math.max(...activeProcessingTasks.map(task => task.eta || 0));
             document.getElementById('eta-text').textContent = `ETA: ${this.formatTime(maxEta)}`;
         } else if (processing > 0) {
-            // Fallback ETA calculation    
+            // Fallback ETA calculation
             const remaining = total - completed;
             const estimatedTime = remaining * 60; // Placeholder: 1 minute per remaining item
             document.getElementById('eta-text').textContent = `ETA: ${this.formatTime(estimatedTime)}`;
         } else {
-            document.getElementById('eta-text').textContent = 'ETA: --';    
+            document.getElementById('eta-text').textContent = 'ETA: --';
         }
     }
 
     updateSearchSectionVisibility() {
-        const searchSection = document.querySelector('.search-section');
         const resultsSection = document.querySelector('.results-section');
         const hasResults = this.currentResults && this.currentResults.length > 0;
-        
+
         if (resultsSection && !this.isFirstRun) {
             resultsSection.style.display = hasResults ? 'block' : 'none';
         }
-        
-        // Always show search section
     }
-    
+
     async cancelConversion(taskId) {
         try {
             await fetch(`/api/cancel-conversion/${taskId}`, { method: 'POST' });
@@ -1022,7 +1005,7 @@ class StashShrinkApp {
                 const response = await fetch('/api/cancel-all-conversions', {
                     method: 'POST'
                 });
-                
+
                 if (response.ok) {
                     this.showToast('All conversions cancelled', 'success');
                 } else {
@@ -1060,12 +1043,12 @@ class StashShrinkApp {
     }
 
     async removeFromQueue(taskId) {
-        // Implementation would depend on backend API
-        alert('Remove from queue functionality to be implemented');
         try {
             await fetch(`/api/remove-from-queue/${taskId}`, { method: 'POST' });
+            this.showToast('Task removed from queue', 'success');
         } catch (error) {
             console.error('Failed to remove from queue:', error);
+            this.showToast('Failed to remove task from queue: ' + error.message, 'error');
         }
     }
 
@@ -1093,18 +1076,18 @@ class StashShrinkApp {
 
     formatTime(seconds) {
         if (!seconds || seconds <= 0) return '--';
-        
+
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
         const secs = Math.floor(seconds % 60);
-        
+
         if (hours > 0) {
             return `${hours}h ${minutes}m ${secs}s`;
         } else if (minutes > 0) {
             return `${minutes}m ${secs}s`;
         } else {
             return `${secs}s`;
-        }        
+        }
     }
 
     truncatePath(path, maxLength = 50) {
