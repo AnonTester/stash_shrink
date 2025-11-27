@@ -518,13 +518,14 @@ input, select {
     width: auto; /* Title - flexible width */
     min-width: 200px;
     max-width: none;
+    text-align: left;
 }
 
 .conversion-section .data-table th:nth-child(2),
 .conversion-section .data-table td:nth-child(2) {
-    width: 140px; /* Status - fixed width */
-    min-width: 140px;
-    max-width: 140px;
+    width: 100px; /* Status - fixed width */
+    min-width: 100px;
+    max-width: 100px;
     text-align: center;
 }
 
@@ -537,9 +538,9 @@ input, select {
 
 .conversion-section .data-table th:nth-child(4),
 .conversion-section .data-table td:nth-child(4) {
-    width: 180px; /* Actions - fixed width */
-    min-width: 180px;
-    max-width: 180px;
+    width: 82px; /* Actions - fixed width */
+    min-width: 82px;
+    max-width: 82px;
     text-align: right;
 }
 

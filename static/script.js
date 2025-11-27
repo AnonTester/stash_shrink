@@ -13,13 +13,18 @@ class StashShrinkApp {
         this.isQueuePaused = false;
         this.totalPages = 1;
 
+        // Store section references
+        this.searchSection = document.querySelector('.search-section');
+        this.resultsSection = document.querySelector('.results-section');
+        this.conversionSection = document.querySelector('.conversion-section');
+        this.showSearchBtn = document.getElementById('show-search');
+        this.showConversionBtn = document.getElementById('show-conversion');
+
         this.initializeTheme();
         this.initializeToastSystem();
         this.initializeEventListeners();
         this.loadConfig();
 
-        // Check if we should show conversion section by default
-        this.updateSearchSectionVisibility();
         this.checkInitialView();
     }
 
@@ -41,7 +46,7 @@ class StashShrinkApp {
             this.showSearchSection();
 
             if (hasQueueItems) {
-                document.getElementById('show-conversion').style.display = 'inline-block';
+                this.showConversionBtn.style.display = 'inline-block';
             }
         } catch (error) {
             console.error('Failed to load initial conversion status:', error);
@@ -145,8 +150,8 @@ class StashShrinkApp {
         document.getElementById('use-video-settings').addEventListener('click', () => this.useVideoSettings());
 
         // Section navigation
-        document.getElementById('show-search').addEventListener('click', () => this.showSearchSection());
-        document.getElementById('show-conversion').addEventListener('click', () => this.showConversionSection());
+        this.showSearchBtn.addEventListener('click', () => this.showSearchSection());
+        this.showConversionBtn.addEventListener('click', () => this.showConversionSection());
 
         // Selection controls
         document.getElementById('select-all').addEventListener('click', () => this.selectAll());
@@ -439,13 +444,12 @@ class StashShrinkApp {
         const tableContainer = document.querySelector('.table-container');
         const paginationControls = document.querySelectorAll('.pagination-controls');
         const resultsControls = document.querySelector('.results-controls');
-        const resultsSection = document.querySelector('.results-section');
 
         tbody.innerHTML = '';
 
         if (!this.currentResults || this.currentResults.length === 0) {
             // Hide entire results section when no results
-            if (resultsSection) resultsSection.style.display = 'none';
+            if (this.resultsSection) this.resultsSection.style.display = 'none';
             if (tableContainer) tableContainer.style.display = 'none';
             paginationControls.forEach(control => control.style.display = 'none');
             if (resultsControls) resultsControls.style.display = 'none';
@@ -459,7 +463,7 @@ class StashShrinkApp {
         }
 
         // Show results section when there are results
-        if (resultsSection) resultsSection.style.display = 'block';
+        // Note: Don't force show results section here - let section navigation handle it
         if (tableContainer) tableContainer.style.display = 'block';
         paginationControls.forEach(control => control.style.display = 'flex');
         if (resultsControls) resultsControls.style.display = 'flex';
@@ -578,6 +582,8 @@ class StashShrinkApp {
                 this.showToast('No scenes found matching your search criteria', 'info');
             } else {
                 this.showToast(`Found ${this.currentResults.length} scenes`, 'success');
+                // Ensure we're in search section when showing results
+                this.showSearchSection();
             }
         } catch (error) {
             console.error('Search failed:', error);
@@ -801,26 +807,36 @@ class StashShrinkApp {
     }
 
     showConversionSection() {
-        document.querySelector('.results-section').style.display = 'none';
-        document.querySelector('.conversion-section').style.display = 'block';
-        document.querySelector('.search-section').style.display = 'none';
+        // Hide other sections
+        if (this.searchSection) this.searchSection.style.display = 'none';
+        if (this.resultsSection) this.resultsSection.style.display = 'none';
 
-        document.getElementById('show-search').style.display = 'inline-block';
-        document.getElementById('show-conversion').style.display = 'none';
+        // Show conversion section
+        if (this.conversionSection) this.conversionSection.style.display = 'block';
+
+        // Update navigation buttons
+        this.showSearchBtn.style.display = 'inline-block';
+        this.showConversionBtn.style.display = 'none';
 
         this.updatePauseButton();
         this.startSSE();
     }
 
     showSearchSection() {
-        document.querySelector('.results-section').style.display = 'block';
-        document.querySelector('.search-section').style.display = 'block';
-        document.querySelector('.conversion-section').style.display = 'none';
-        document.getElementById('show-search').style.display = 'none';
-        document.getElementById('show-conversion').style.display = 'inline-block';
+        // Hide other sections
+        if (this.conversionSection) this.conversionSection.style.display = 'none';
 
-        // Update results section visibility based on current results
-        this.updateSearchSectionVisibility();
+        // Show search sections
+        if (this.searchSection) this.searchSection.style.display = 'block';
+
+        // Show results section only if we have results
+        if (this.resultsSection && this.currentResults && this.currentResults.length > 0) {
+            this.resultsSection.style.display = 'block';
+        }
+
+        // Update navigation buttons
+        this.showSearchBtn.style.display = 'none';
+        this.showConversionBtn.style.display = 'inline-block';
     }
 
     startSSE() {
@@ -891,7 +907,7 @@ class StashShrinkApp {
 
         // Show conversion button if there are tasks
         if (hasAnyTasks) {
-            document.getElementById('show-conversion').style.display = 'inline-block';
+            this.showConversionBtn.style.display = 'inline-block';
         }
     }
 
@@ -979,76 +995,6 @@ class StashShrinkApp {
             document.getElementById('eta-text').textContent = `ETA: ${this.formatTime(estimatedTime)}`;
         } else {
             document.getElementById('eta-text').textContent = 'ETA: --';
-        }
-    }
-
-    updateSearchSectionVisibility() {
-        const resultsSection = document.querySelector('.results-section');
-        const hasResults = this.currentResults && this.currentResults.length > 0;
-
-        if (resultsSection && !this.isFirstRun) {
-            resultsSection.style.display = hasResults ? 'block' : 'none';
-        }
-    }
-
-    async cancelConversion(taskId) {
-        try {
-            await fetch(`/api/cancel-conversion/${taskId}`, { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to cancel conversion:', error);
-        }
-    }
-
-    async cancelAllConversions() {
-        if (confirm('Are you sure you want to cancel all conversions?')) {
-            try {
-                const response = await fetch('/api/cancel-all-conversions', {
-                    method: 'POST'
-                });
-
-                if (response.ok) {
-                    this.showToast('All conversions cancelled', 'success');
-                } else {
-                    throw new Error('Failed to cancel all conversions');
-                }
-            } catch (error) {
-                console.error('Failed to cancel all conversions:', error);
-                this.showToast('Failed to cancel all conversions: ' + error.message, 'error');
-            }
-        }
-    }
-
-    async clearCompleted() {
-        try {
-            await fetch('/api/clear-completed', { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to clear completed:', error);
-        }
-    }
-
-    async showLog(taskId) {
-        // This would need to fetch the actual log content
-        const logContent = "Log content would be displayed here...";
-        document.getElementById('log-content').textContent = logContent;
-        document.getElementById('log-modal').style.display = 'block';
-    }
-
-    hideLogModal() {
-        document.getElementById('log-modal').style.display = 'none';
-    }
-
-    async retryConversion(taskId) {
-        // Implementation would depend on backend API
-        alert('Retry functionality to be implemented');
-    }
-
-    async removeFromQueue(taskId) {
-        try {
-            await fetch(`/api/remove-from-queue/${taskId}`, { method: 'POST' });
-            this.showToast('Task removed from queue', 'success');
-        } catch (error) {
-            console.error('Failed to remove from queue:', error);
-            this.showToast('Failed to remove task from queue: ' + error.message, 'error');
         }
     }
 
