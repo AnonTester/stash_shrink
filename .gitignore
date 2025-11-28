@@ -3,6 +3,7 @@ logs/*
 .git
 config.json
 conversion_queue.json
+*.swp
 
 .DS_Store
 **/__pycache__/

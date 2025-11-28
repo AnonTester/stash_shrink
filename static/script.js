@@ -338,6 +338,14 @@ class StashShrinkApp {
         const modal = document.getElementById('settings-modal');
         this.populateSettingsForm();
         modal.style.display = 'block';
+
+        // Prevent background scrolling when modal is open
+        document.body.style.overflow = 'hidden';
+        document.body.style.position = 'fixed';
+        document.body.style.width = '100%';
+        document.body.style.height = '100%';
+        document.body.style.top = '0';
+        document.body.style.left = '0';
     }
 
     hideSettingsModal() {
@@ -346,6 +354,14 @@ class StashShrinkApp {
             return;
         }
         document.getElementById('settings-modal').style.display = 'none';
+
+        // Restore background scrolling when modal is closed
+        document.body.style.overflow = '';
+        document.body.style.position = '';
+        document.body.style.width = '';
+        document.body.style.height = '';
+        document.body.style.top = '';
+        document.body.style.left = '';
     }
 
     populateSettingsForm() {
