@@ -20,6 +20,10 @@ class StashShrinkApp {
         this.showSearchBtn = document.getElementById('show-search');
         this.showConversionBtn = document.getElementById('show-conversion');
 
+        // Store conversion control references
+        this.conversionControls = document.querySelector('.conversion-controls');
+        this.progressOverview = document.querySelector('.progress-overview');
+
         this.initializeTheme();
         this.initializeToastSystem();
         this.initializeEventListeners();
@@ -814,7 +818,7 @@ class StashShrinkApp {
         // Show conversion section
         if (this.conversionSection) this.conversionSection.style.display = 'block';
 
-        // Update navigation buttons
+        // Update navigation buttons - hide "View Conversion Queue" when we're on conversion page
         this.showSearchBtn.style.display = 'inline-block';
         this.showConversionBtn.style.display = 'none';
 
@@ -834,7 +838,7 @@ class StashShrinkApp {
             this.resultsSection.style.display = 'block';
         }
 
-        // Update navigation buttons
+        // Update navigation buttons - show "View Conversion Queue" when we're on search page
         this.showSearchBtn.style.display = 'none';
         this.showConversionBtn.style.display = 'inline-block';
     }
@@ -905,9 +909,17 @@ class StashShrinkApp {
         const buttonStates = this.updateButtonStates(queue);
         const hasAnyTasks = buttonStates.hasAnyTasks;
 
-        // Show conversion button if there are tasks
-        if (hasAnyTasks) {
+        // Show conversion button if there are tasks (only when we're on search page)
+        if (hasAnyTasks && this.conversionSection.style.display === 'none') {
             this.showConversionBtn.style.display = 'inline-block';
+        }
+
+        // Hide conversion controls and progress overview when there are no tasks
+        if (this.conversionControls) {
+            this.conversionControls.style.display = hasAnyTasks ? 'flex' : 'none';
+        }
+        if (this.progressOverview) {
+            this.progressOverview.style.display = hasAnyTasks ? 'block' : 'none';
         }
     }
 

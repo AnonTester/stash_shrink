@@ -5,11 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Stash Shrink{% endblock %}</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
 </head>
 <body data-show-settings="{{ show_settings }}">
     <header>
         <div class="header-content">
-            <h1>Stash Shrink</h1>
+            <h1><img src="/static/logo.png" width="50px" border=0 style="vertical-align: middle;" />Stash Shrink</h1>
             <button id="settings-btn" class="btn btn-secondary" {% if show_settings %}style="display: none;"{% endif %}>Settings</button>
         </div>
     </header>
