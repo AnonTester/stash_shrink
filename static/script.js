@@ -171,7 +171,7 @@ class StashShrinkApp {
         document.getElementById('cancel-all').addEventListener('click', () => this.cancelAllConversions());
         document.getElementById('clear-completed').addEventListener('click', () => this.clearCompleted());
         document.getElementById('toggle-pause').addEventListener('click', () => this.toggleQueuePause());
-
+        document.getElementById('remove-all-pending').addEventListener('click', () => this.removeAllPending());
 
         // Pagination - Top controls
         document.getElementById('page-size-top').addEventListener('change', (e) => {
@@ -246,7 +246,7 @@ class StashShrinkApp {
             if (action === 'remove' && taskId) this.removeFromQueue(taskId);
             if (action === 'show-log' && taskId) this.showLog(taskId);
             if (action === 'retry' && taskId) this.retryConversion(taskId);
-        });        
+        });
     }
 
     // Enhanced pagination methods
@@ -487,7 +487,7 @@ class StashShrinkApp {
             this.showToast('Failed to cancel conversion: ' + error.message, 'error');
         }
      }
- 
+
     async showLog(taskId) {
         try {
             // Fetch the actual log content from the server
@@ -880,6 +880,7 @@ class StashShrinkApp {
                 this.isQueuePaused = result.paused;
                 this.updatePauseButton();
                 this.showToast(`Queue ${this.isQueuePaused ? 'paused' : 'resumed'}`, 'info');
+                if (!this.isQueuePaused) this.startQueueProcessing();
             }
         } catch (error) {
             console.error('Failed to toggle pause:', error);
@@ -982,24 +983,36 @@ class StashShrinkApp {
         );
         const hasCompleted = queue.some(task => task.status === 'completed');
         const hasErrors = queue.some(task => task.status === 'error');
+        const hasProcessing = queue.some(task => task.status === 'processing');
+        const hasPending = queue.some(task => task.status === 'pending');
 
         // Update Cancel All button
         const cancelAllBtn = document.getElementById('cancel-all');
         if (cancelAllBtn) {
-            cancelAllBtn.disabled = !hasActiveOrPending;
+            cancelAllBtn.style.display = hasProcessing ? 'inline-block' : 'none';
         }
 
         // Update Clear Completed button
         const clearCompletedBtn = document.getElementById('clear-completed');
         if (clearCompletedBtn) {
-            clearCompletedBtn.disabled = !(hasCompleted || hasErrors);
+            clearCompletedBtn.style.display = (hasCompleted || hasErrors) ? 'inline-block' : 'none';
+        }
+
+        // Update Remove All Pending button
+        const removeAllPendingBtn = document.getElementById('remove-all-pending');
+        if (removeAllPendingBtn) {
+           removeAllPendingBtn.style.display = hasPending ? 'inline-block' : 'none';
         }
 
         // Update pause button state
         this.updatePauseButton();
         document.getElementById('toggle-pause').disabled = hasActiveOrPending && this.isQueuePaused;
 
-        return { hasActiveOrPending, hasCompleted, hasErrors, hasAnyTasks: queue.length > 0 };
+        return {
+            hasActiveOrPending, hasCompleted, hasErrors,
+            hasProcessing, hasPending,
+            hasAnyTasks: queue.length > 0
+        };
     }
 
     updateConversionUI(queue) {
@@ -1064,13 +1077,13 @@ class StashShrinkApp {
                 <td class="conversion-actions">
                     ${task.status === 'error' ?
                         `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log">Log</button>
-                         <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry">Retry</button>` : 
+                         <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry">Retry</button>` :
                         ''}
                     ${task.status === 'processing' ?
-                        `<button class="btn btn-danger btn-sm" data-task-id="${task.task_id}" data-action="cancel">Cancel</button>` : 
+                        `<button class="btn btn-danger btn-sm" data-task-id="${task.task_id}" data-action="cancel">Cancel</button>` :
                         ''}
                     ${task.status === 'pending' || task.status === 'completed' ?
-                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove">Remove</button>` : 
+                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove">Remove</button>` :
                         ''}
                 </td>
             `;
@@ -1106,6 +1119,23 @@ class StashShrinkApp {
             document.getElementById('eta-text').textContent = 'ETA: --';
         }
     }
+
+    async removeAllPending() {
+        if (confirm('Are you sure you want to remove all pending conversions from the queue?')) {
+            try {
+                const response = await fetch('/api/remove-all-pending', { method: 'POST' });
+                if (response.ok) {
+                    this.showToast('All pending conversions removed from queue', 'success');
+                } else {
+                    throw new Error('Failed to remove all pending conversions');
+                }
+            } catch (error) {
+                console.error('Failed to remove all pending conversions:', error);
+                this.showToast('Failed to remove all pending conversions: ' + error.message, 'error');
+            }
+        }
+    }
+
 
     // Utility functions
     formatDuration(seconds) {

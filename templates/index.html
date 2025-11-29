@@ -7,7 +7,7 @@
         <button id="show-search" class="btn btn-secondary" style="display: none;">Back to Search</button>
         <button id="show-conversion" class="btn btn-secondary" style="display: none;">View Conversion Queue</button>
     </div>
-    
+
     <!-- Search Section -->
     <section class="search-section">
         <h2>Search Videos</h2>
@@ -60,7 +60,7 @@
             </div>
             <button id="convert-videos" class="btn btn-primary">Convert Selected Videos</button>
         </div>
-        
+
         <!-- Pagination Above Table -->
         <div class="pagination-controls top-pagination">
             <div class="pagination-left">
@@ -74,21 +74,21 @@
                 </select>
                 <span id="results-count-top" class="results-count"></span>
             </div>
-            
+
             <div class="pagination-center">
                 <button id="first-page-top" class="btn btn-secondary pagination-btn" title="First Page">«</button>
                 <button id="prev-page-top" class="btn btn-secondary pagination-btn" title="Previous Page">‹</button>
-                
+
                 <div class="page-input-container">
                     <span>Page</span>
                     <input type="number" id="page-input-top" min="1" value="1" class="page-input">
                     <span id="total-pages-top">of 1</span>
                 </div>
-                
+
                 <button id="next-page-top" class="btn btn-secondary pagination-btn" title="Next Page">›</button>
                 <button id="last-page-top" class="btn btn-secondary pagination-btn" title="Last Page">»</button>
             </div>
-            
+
             <div class="pagination-right">
                 <span id="page-info-top">Page 1 of 1</span>
             </div>
@@ -153,6 +153,7 @@
         <h2>Conversion Queue</h2>
         <div class="conversion-controls">
             <button id="toggle-pause" class="btn btn-secondary">Pause Queue</button>
+            <button id="remove-all-pending" class="btn btn-warning" style="display: none;">Remove All Pending</button>
             <button id="cancel-all" class="btn btn-danger" style="margin-left: auto;">Cancel All</button>
             <button id="clear-completed" class="btn btn-secondary">Clear Completed & Errors</button>
         </div>

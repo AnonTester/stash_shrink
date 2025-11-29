@@ -98,14 +98,14 @@ class Scene(BaseModel):
     title: str
     details: Optional[str] = None
     files: List[SceneFile]
-    
+
     # For backward compatibility with existing code that expects path and file
     @property
     def path(self):
         """Return the path of the first file"""
         return self.files[0].path if self.files else ""
-    
-    @property 
+
+    @property
     def file(self):
         """Return the first file's data as a dict for backward compatibility"""
         if self.files and len(self.files) > 0:
@@ -211,23 +211,23 @@ def apply_path_mappings(file_path: str, path_mappings: List[str]) -> str:
     """
     if not path_mappings:
         return file_path
-    
+
     for mapping in path_mappings:
         if ':' in mapping:
             docker_path, host_path = mapping.split(':', 1)
             docker_path = docker_path.strip()
             host_path = host_path.strip()
-            
+
             # Ensure paths end with slash for proper replacement
             docker_path_norm = docker_path.rstrip('/') + '/'
             host_path_norm = host_path.rstrip('/') + '/'
-            
+
             # Replace Docker path with host path
             if file_path.startswith(docker_path_norm):
                 return file_path.replace(docker_path_norm, host_path_norm, 1)
             elif file_path.startswith(host_path_norm):
                 return file_path.replace(host_path_norm, docker_path_norm, 1)
-    
+
     return file_path
 
 async def stash_request(graphql_query: str, variables: dict = None):
@@ -235,14 +235,14 @@ async def stash_request(graphql_query: str, variables: dict = None):
     headers = {}
     if config.get('api_key'):
         headers['ApiKey'] = config['api_key']
-    
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             logger.info(f"Making GraphQL request to {config['stash_url']}/graphql")
             logger.debug(f"GraphQL Query: {graphql_query}")
             if variables:
                 logger.debug(f"GraphQL Variables: {variables}")
-            
+
             response = await client.post(
                 f"{config['stash_url']}/graphql",
                 json={"query": graphql_query, "variables": variables},
@@ -250,13 +250,13 @@ async def stash_request(graphql_query: str, variables: dict = None):
             )
             response.raise_for_status()
             result = response.json()
-            
+
             # Log the structure of the response for debugging
             if 'data' in result and 'findScenes' in result['data']:
                 scenes_count = len(result['data']['findScenes'].get('scenes', []))
                 reported_count = result['data']['findScenes'].get('count', 0)
                 logger.debug(f"Stash response: {scenes_count} scenes returned, {reported_count} reported total")
-            
+
             return result
     except httpx.ConnectError as e:
         logger.error(f"Connection error to Stash at {config['stash_url']}: {e}")
@@ -264,7 +264,7 @@ async def stash_request(graphql_query: str, variables: dict = None):
         if variables:
             logger.error(f"GraphQL Variables: {variables}")
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Cannot connect to Stash at {config['stash_url']}. Please check if the URL is correct and Stash is running."
         )
     except httpx.TimeoutException as e:
@@ -281,7 +281,7 @@ async def stash_request(graphql_query: str, variables: dict = None):
         logger.error(f"GraphQL Query that failed: {graphql_query}")
         if variables:
             logger.error(f"GraphQL Variables: {variables}")
-        
+
         # Try to get more details from the response
         error_detail = f"Stash returned error {e.response.status_code}"
         try:
@@ -291,7 +291,7 @@ async def stash_request(graphql_query: str, variables: dict = None):
                 error_detail += f": {', '.join(error_messages)}"
         except:
             pass
-            
+
         raise HTTPException(
             status_code=400,
             detail=error_detail
@@ -333,7 +333,7 @@ async def search_scenes(search_params: SearchParams):
         query = """
         query FindAllScenes {
           findScenes(
-            filter: { 
+            filter: {
               per_page: -1
             }
           ) {
@@ -358,17 +358,17 @@ async def search_scenes(search_params: SearchParams):
           }
         }
         """
-        
+
         logger.info("Executing GraphQL query to find all scenes")
         result = await stash_request(query)
-        
+
         if 'errors' in result:
             logger.error(f"GraphQL errors in response: {result['errors']}")
             # If per_page: -1 doesn't work, try a large number
             query_fallback = """
             query FindAllScenes {
               findScenes(
-                filter: { 
+                filter: {
                   per_page: 10000
                 }
               ) {
@@ -395,29 +395,29 @@ async def search_scenes(search_params: SearchParams):
             """
             logger.info("Trying fallback query with per_page: 10000")
             result = await stash_request(query_fallback)
-            
+
             if 'errors' in result:
                 logger.error(f"GraphQL errors in fallback response: {result['errors']}")
                 raise HTTPException(status_code=400, detail=f"GraphQL error: {result['errors']}")
-        
+
         if 'data' not in result or 'findScenes' not in result['data']:
             logger.error(f"Unexpected response structure: {result}")
             raise HTTPException(status_code=400, detail="Unexpected response structure from Stash")
-        
+
         scenes_data = result['data']['findScenes']['scenes']
         actual_count = len(scenes_data)
         reported_count = result['data']['findScenes'].get('count', actual_count)
-        
+
         logger.info(f"Found {actual_count} scenes in Stash (reported count: {reported_count})")
-        
+
         # If we're getting fewer scenes than expected, log a warning
         if reported_count > actual_count:
             logger.warning(f"Stash returned {actual_count} scenes but reported {reported_count}. There might be a pagination limit.")
-        
+
         scenes = []
         config = get_config()
         path_mappings = config.get('path_mappings', [])
-        
+
         for scene_data in scenes_data:
             try:
                 # Only include scenes that have files
@@ -439,53 +439,53 @@ async def search_scenes(search_params: SearchParams):
                                 'duration': file_data.get('duration', 0),
                                 'video_codec': file_data.get('video_codec', '')
                             }
-                            
+
                             # Apply path mappings to file path
                             if processed_file_data['path']:
                                 processed_file_data['path'] = apply_path_mappings(
                                     processed_file_data['path'], path_mappings
                                 )
-                            
+
                             scene_file = SceneFile(**processed_file_data)
                             files.append(scene_file)
                         except Exception as e:
                             logger.warning(f"Failed to parse file data: {file_data}, error: {e}")
                             continue
-                    
+
                     # Apply filters - a file should be included if it exceeds ANY of the max limits
                     # OR doesn't match the specified codec
                     filtered_files = []
                     for file in files:
                         include_file = False
-                        
+
                         # Check if file exceeds any of the maximum limits
                         exceeds_limits = False
-                        
+
                         # Check width (only if file has width and we're filtering by width)
                         if search_params.max_width is not None and file.width is not None:
                             if file.width > search_params.max_width:
                                 exceeds_limits = True
                                 logger.debug(f"File {file.basename} exceeds width: {file.width} > {search_params.max_width}")
-                        
+
                         # Check height
                         if search_params.max_height is not None and file.height is not None:
                             if file.height > search_params.max_height:
                                 exceeds_limits = True
                                 logger.debug(f"File {file.basename} exceeds height: {file.height} > {search_params.max_height}")
-                        
+
                         # Check bitrate
                         if search_params.max_bitrate and file.bit_rate:
                             bitrate_value = convert_bitrate_to_bps(search_params.max_bitrate)
                             if file.bit_rate > bitrate_value:
                                 exceeds_limits = True
                                 logger.debug(f"File {file.basename} exceeds bitrate: {file.bit_rate} > {bitrate_value}")
-                        
+
                         # Check framerate
                         if search_params.max_framerate is not None and file.frame_rate is not None:
                             if file.frame_rate > search_params.max_framerate:
                                 exceeds_limits = True
                                 logger.debug(f"File {file.basename} exceeds framerate: {file.frame_rate} > {search_params.max_framerate}")
-                        
+
                         # Check codec - include if codec doesn't match (we want to convert files with wrong codec)
                         wrong_codec = False
                         if search_params.codec and file.video_codec:
@@ -495,44 +495,44 @@ async def search_scenes(search_params: SearchParams):
                             if file_codec != search_codec:
                                 wrong_codec = True
                                 logger.debug(f"File {file.basename} has wrong codec: {file.video_codec} != {search_params.codec}")
-                        
+
                         # Check path filter
                         path_matches = True
                         if search_params.path and search_params.path not in file.path:
                             path_matches = False
                             logger.debug(f"File {file.basename} doesn't match path filter: {file.path}")
-                        
+
                         # Include file if it exceeds any limits OR has wrong codec, AND matches path filter
                         if (exceeds_limits or wrong_codec) and path_matches:
                             include_file = True
-                        
+
                         # If no filters are specified, include all files
                         if not any([
-                            search_params.max_width is not None, 
-                            search_params.max_height is not None, 
-                            search_params.max_bitrate is not None, 
-                            search_params.max_framerate is not None, 
-                            search_params.codec is not None, 
+                            search_params.max_width is not None,
+                            search_params.max_height is not None,
+                            search_params.max_bitrate is not None,
+                            search_params.max_framerate is not None,
+                            search_params.codec is not None,
                             search_params.path is not None
                         ]):
                             include_file = True
-                        
+
                         if include_file:
                             filtered_files.append(file)
-                    
+
                     # Only include scene if it has files after filtering
                     if filtered_files:
                         scene_data['files'] = filtered_files
                         scene = Scene(**scene_data)
                         scenes.append(scene)
-                        
+
             except Exception as e:
                 logger.error(f"Failed to process scene data: {scene_data}, error: {e}")
                 continue
-        
+
         logger.info(f"Returning {len(scenes)} scenes after filtering")
         return {"scenes": scenes}
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
@@ -551,7 +551,7 @@ async def get_conversion_log(task_id: str):
         task = next((t for t in conversion_queue if t.task_id == task_id), None)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        
+
         # Read the log file
         if os.path.exists(task.log_file):
             with open(task.log_file, 'r') as f:
@@ -567,7 +567,7 @@ async def get_conversion_log(task_id: str):
 async def queue_conversion(scene_ids: List[str]):
     config = get_config()
     path_mappings = config.get('path_mappings', [])
-    
+
     # Check for duplicates
     existing_scene_ids = {task.scene.id for task in conversion_queue}
     new_scene_ids = set(scene_ids) - existing_scene_ids
@@ -598,11 +598,11 @@ async def queue_conversion(scene_ids: List[str]):
           }
         }
         """
-        
+
         result = await stash_request(scenes_query, {"ids": scene_ids})
         if 'errors' in result:
             raise HTTPException(status_code=400, detail=result['errors'])
-        
+
         queued_count = 0
         for scene_data in result['data']['findScenes']['scenes']:
             try:
@@ -613,31 +613,31 @@ async def queue_conversion(scene_ids: List[str]):
                             file_data['path'] = apply_path_mappings(
                                 file_data['path'], path_mappings
                             )
-                    
+
                     scene = Scene(**scene_data)
                     task_id = str(uuid.uuid4())
                     log_file = os.path.join(LOGS_DIR, f"{scene.id}.log")
-                    
+
                     task = ConversionTask(
                         task_id=task_id,
                         scene=scene,
                         log_file=log_file
                     )
-                    
+
                     conversion_queue.append(task)
                     task_status[task_id] = task
                     queued_count += 1
-                    save_queue_state()  # Save after adding to queue                    
+                    save_queue_state()  # Save after adding to queue
             except Exception as e:
                 logger.error(f"Failed to queue scene {scene_data.get('id', 'unknown')}: {e}")
                 continue
-        
+
         # Start processing if not already running
         if queued_count > 0 and len(active_tasks) < config['max_concurrent_tasks']:
             asyncio.create_task(process_conversion_queue())
-        
+
         return {"status": "queued", "count": queued_count}
-        
+
     except Exception as e:
         logger.error(f"Error queueing conversion: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to queue conversion: {str(e)}")
@@ -659,11 +659,11 @@ async def cancel_conversion(task_id: str):
             # Mark task as cancelled
             task.status = "cancelled"
             task.error = "Conversion cancelled by user"
-            
+
             # Remove from active tasks
             if task_id in active_tasks:
                 active_tasks.remove(task_id)
-            
+
             # Clean up temporary files if they exist
             if task.output_file and os.path.exists(task.output_file):
                 try:
@@ -671,22 +671,22 @@ async def cancel_conversion(task_id: str):
                     logger.info(f"Cleaned up output file for cancelled task: {task.output_file}")
                 except Exception as e:
                     logger.error(f"Failed to clean up output file {task.output_file}: {e}")
-            
+
             # Write cancellation to log
             try:
                 with open(task.log_file, 'a') as log:
                     log.write(f"\n--- Conversion cancelled by user ---\n")
             except Exception as e:
                 logger.error(f"Failed to write cancellation to log: {e}")
-            
+
             logger.info(f"Cancelled conversion task {task_id} for scene: {task.scene.title}")
-            
-            # Remove from queue            
+
+            # Remove from queue
             conversion_queue.pop(i)
             task_status.pop(task_id, None)
             break
-    
-    save_queue_state()  # Save after cancellation    
+
+    save_queue_state()  # Save after cancellation
     return {"status": "cancelled"}
 
 @app.post("/api/clear-completed")
@@ -696,7 +696,7 @@ async def clear_completed():
     tasks_removed = len(conversion_queue) - len(tasks_to_keep)
     conversion_queue = tasks_to_keep
     save_queue_state()
-    logger.info(f"Cleared {tasks_removed} completed/error tasks from queue")    
+    logger.info(f"Cleared {tasks_removed} completed/error tasks from queue")
     return {"status": "cleared"}
 
 @app.post("/api/cancel-all-conversions")
@@ -749,25 +749,44 @@ async def remove_from_queue(task_id: str):
     save_queue_state()
     return {"status": "removed", "count": removed_count}
 
+@app.post("/api/remove-all-pending")
+async def remove_all_pending():
+    """Remove all pending tasks from the conversion queue"""
+    global conversion_queue
+
+    try:
+        # Count pending tasks before removal
+        pending_count = len([task for task in conversion_queue if task.status == 'pending'])
+
+        # Remove all pending tasks
+        conversion_queue = [task for task in conversion_queue if task.status != 'pending']
+
+        save_queue_state()
+        logger.info(f"Removed {pending_count} pending tasks from queue")
+        return {"status": "removed", "count": pending_count}
+    except Exception as e:
+        logger.error(f"Failed to remove pending tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to remove pending tasks: {str(e)}")
+
 @app.post("/api/retry-conversion/{task_id}")
 async def retry_conversion(task_id: str):
     """Retry a failed conversion task"""
     global conversion_queue
-    
+
     try:
         # Find the task in the queue
         task_index = next((i for i, t in enumerate(conversion_queue) if t.task_id == task_id), -1)
         if task_index == -1:
             raise HTTPException(status_code=404, detail="Task not found")
-        
+
         task = conversion_queue[task_index]
-        
+
         # Reset task status to pending for retry
         task.status = "pending"
         task.progress = 0.0
         task.eta = None
         task.error = None
-        
+
         save_queue_state()
         logger.info(f"Retrying conversion task {task_id} for scene: {task.scene.title}")
         return {"status": "retried"}
@@ -789,7 +808,7 @@ async def process_conversion_queue():
             task.status = "processing"
             asyncio.create_task(convert_video(task))
             save_queue_state()
-        
+
         await asyncio.sleep(0.1)
 
 class FFmpegProgress:
@@ -798,18 +817,18 @@ class FFmpegProgress:
         self.current_time = 0.0
         self.progress = 0.0
         self.last_update = time.time()
-        
+
     def parse_line(self, line: str):
         """Parse FFmpeg output line to extract progress information"""
         line = line.strip()
         current_time = time.time()
-        
+
         # Only process progress updates every 0.5 seconds to reduce CPU load
         if current_time - self.last_update < 0.5:
             return False
-            
+
         self.last_update = current_time
-        
+
         # Try multiple FFmpeg progress output formats
         time_match = re.search(r'time=(\d+:\d+:\d+\.\d+)', line)
         if time_match:
@@ -818,7 +837,7 @@ class FFmpegProgress:
             if self.total_duration > 0:
                 self.progress = min((self.current_time / self.total_duration) * 100, 99.0)  # Cap at 99% until complete
             return True
-            
+
         # Alternative format: time=00:01:23.45
         time_match = re.search(r'time=(\d{2}:\d{2}:\d{2}\.\d{2})', line)
         if time_match:
@@ -827,7 +846,7 @@ class FFmpegProgress:
             if self.total_duration > 0:
                 self.progress = min((self.current_time / self.total_duration) * 100, 99.0)
             return True
-            
+
         # Look for frame information as fallback
         frame_match = re.search(r'frame=\s*(\d+)', line)
         if frame_match and self.total_duration > 0:
@@ -836,13 +855,13 @@ class FFmpegProgress:
             estimated_duration = int(frame_match.group(1)) / 30
             self.progress = min((estimated_duration / self.total_duration) * 100, 99.0)
             return True
-            
-        return False        
-        
+
+        return False
+
     def parse_line(self, line: str):
         """Parse FFmpeg output line to extract progress information"""
         line = line.strip()
-        
+
         # Try to parse time from various FFmpeg output formats
         time_match = re.search(r'time=(\d+:\d+:\d+\.\d+)', line)
         if time_match:
@@ -851,7 +870,7 @@ class FFmpegProgress:
             if self.total_duration > 0:
                 self.progress = min((self.current_time / self.total_duration) * 100, 100.0)
             return True
-            
+
         # Alternative time format
         time_match = re.search(r'time=(\d+)', line)
         if time_match:
@@ -859,9 +878,9 @@ class FFmpegProgress:
             if self.total_duration > 0:
                 self.progress = min((self.current_time / self.total_duration) * 100, 100.0)
             return True
-            
+
         return False
-    
+
     def parse_time_string(self, time_str: str) -> float:
         """Convert time string (HH:MM:SS.ms) to seconds"""
         try:
@@ -879,26 +898,26 @@ async def convert_video(task: ConversionTask):
     config = get_config()
     delete_original = config.get('delete_original', True)
     video_settings = config['video_settings']
-    
+
     try:
         # Use the first file from the scene
         if not task.scene.files or len(task.scene.files) == 0:
             raise Exception("No files found in scene")
-            
+
         scene_file = task.scene.files[0]
         input_file = scene_file.path
         base_name = os.path.splitext(input_file)[0]
         temp_output = f"{base_name}.converting.{video_settings['container']}"
         final_output = await find_available_filename(base_name, video_settings['container'])
-        
+
         # Get file duration for progress calculation
         file_duration = scene_file.duration or 0
         progress_tracker = FFmpegProgress(file_duration)
-        
+
         logger.info(f"Starting conversion for {input_file}")
         # Build FFmpeg command with progress output
         ffmpeg_cmd = build_ffmpeg_command(input_file, temp_output, video_settings)
-        
+
         # Write to log
         with open(task.log_file, 'a') as log:
             log.write(f"Starting conversion: {input_file} -> {final_output}\n")
@@ -906,10 +925,10 @@ async def convert_video(task: ConversionTask):
             log.write(f"FFmpeg command: {ffmpeg_cmd}\n")
             log.write(f"Delete original: {delete_original}\n")
             log.write("-" * 80 + "\n")
-        
+
         # Start time for ETA calculation
         start_time = time.time()
-        
+
         # Run FFmpeg and capture progress
         process = await asyncio.create_subprocess_shell(
             ffmpeg_cmd,
@@ -917,28 +936,28 @@ async def convert_video(task: ConversionTask):
             stderr=asyncio.subprocess.PIPE,
             preexec_fn=os.setsid
         )
-        
+
         # Read stderr line by line to capture progress
         while True:
             line_bytes = await process.stderr.readline()
             if not line_bytes:
                 break
-            
+
             # Check if process has finished
             if process.returncode is not None:
                 # Process finished, break out of the loop
-                break            
-                
+                break
+
             line = line_bytes.decode('utf-8', errors='ignore').strip()
-            
+
             # Write to log
             with open(task.log_file, 'a') as log:
                 log.write(line + '\n')
-            
+
             # Parse progress
             if progress_tracker.parse_line(line):
                 task.progress = progress_tracker.progress
-                
+
                 # Calculate ETA
                 if task.progress > 0:
                     elapsed_time = time.time() - start_time
@@ -948,23 +967,23 @@ async def convert_video(task: ConversionTask):
                         task.eta = max(0, remaining_time)  # Ensure ETA is not negative
                     else:
                         task.eta = 0
-                
-                logger.debug(f"Progress update: {task.progress:.1f}%, ETA: {task.eta:.1f}s, Current time: {progress_tracker.current_time:.1f}s")                    
-            
+
+                logger.debug(f"Progress update: {task.progress:.1f}%, ETA: {task.eta:.1f}s, Current time: {progress_tracker.current_time:.1f}s")
+
             # Check if task was cancelled
             if task.status == "cancelled":
                 process.terminate()
                 break
-            
-            await asyncio.sleep(0.1)  # Small delay to prevent busy waiting            
-                    
+
+            await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
+
         # Capture any remaining output (though we should have read most of it)
         remaining_stdout, remaining_stderr = await process.communicate()
 
         # Decode the remaining output
         stdout = remaining_stdout.decode('utf-8', errors='ignore') if remaining_stdout else ""
-        stderr = remaining_stderr.decode('utf-8', errors='ignore') if remaining_stderr else ""        
-        
+        stderr = remaining_stderr.decode('utf-8', errors='ignore') if remaining_stderr else ""
+
         # Final log entry
         with open(task.log_file, 'a') as log:
             log.write("-" * 80 + "\n")
@@ -974,28 +993,28 @@ async def convert_video(task: ConversionTask):
                 log.write(f"Original file exists: {input_file}\n")
             else:
                 log.write(f"Original file not found: {input_file}\n")
-                
+
             if stdout:
                 log.write(f"STDOUT: {stdout}\n")
             if stderr:
                 log.write(f"STDERR: {stderr}\n")
-        
+
         if process.returncode == 0:
             # Verify the output file was created
             if not os.path.exists(temp_output):
                 raise Exception("Output file was not created")
-                
+
             # Get file size for verification
             output_size = os.path.getsize(temp_output)
             if output_size == 0:
                 raise Exception("Output file is empty")
-            
+
             # Rename temporary file to final name
             os.rename(temp_output, final_output)
-            
+
             # Update Stash with the new file
             await update_stash_file(task.scene.id, scene_file.id, final_output)
-            
+
             # Delete original file if configured
             original_file_exists = os.path.exists(input_file)
             if delete_original and original_file_exists:
@@ -1005,14 +1024,14 @@ async def convert_video(task: ConversionTask):
                 logger.warning(f"Original file not found for deletion: {input_file}")
             else:
                 logger.info(f"Original file preserved: {input_file}")
-            
+
             task.status = "completed"
             task.output_file = final_output
             task.progress = 100.0
-            task.eta = 0            
-            
+            task.eta = 0
+
             logger.info(f"Successfully converted {input_file} to {final_output}")
-            save_queue_state()  # Save on successful completion            
+            save_queue_state()  # Save on successful completion
         else:
             task.status = "error"
             task.error = f"FFmpeg failed with return code {process.returncode}"
@@ -1022,11 +1041,11 @@ async def convert_video(task: ConversionTask):
         task.error = str(e)
         logger.error(f"Conversion failed for {task.scene.files[0].path if task.scene.files else 'unknown'}: {e}")
         logger.info(f"Delete original setting: {delete_original}")
-        
+
         # Clean up temporary file if it exists
         if 'temp_output' in locals() and os.path.exists(temp_output):
             try:
-                logger.info(f"Cleaning up temporary file: {temp_output}")                
+                logger.info(f"Cleaning up temporary file: {temp_output}")
                 os.remove(temp_output)
             except Exception as cleanup_error:
                 logger.error(f"Failed to clean up temporary file {temp_output}: {cleanup_error}")
@@ -1035,12 +1054,12 @@ async def convert_video(task: ConversionTask):
 
 def build_ffmpeg_command(input_file: str, output_file: str, settings: Dict[str, Any]) -> str:
     framerate_option = f"-r {settings['framerate']}" if settings.get('framerate') else ""
-    
+
     # Use progress reporting and verbose output for better progress tracking
     cmd = f"""ffmpeg -y -hide_banner -loglevel verbose -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\,min({settings['width']}/iw\,{settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf 28 -c:a aac -b:v {settings['bitrate']} -maxrate {settings['bitrate']} -bufsize {settings['buffer_size']} -f {settings['container']} "{output_file}" """
-     
-    logger.debug(f"FFmpeg command: {cmd}")    
-    
+
+    logger.debug(f"FFmpeg command: {cmd}")
+
     return cmd
 
 async def find_available_filename(base_name: str, container: str) -> str:
@@ -1050,7 +1069,7 @@ async def find_available_filename(base_name: str, container: str) -> str:
             candidate = f"{base_name}.{container}"
         else:
             candidate = f"{base_name}_{counter}.{container}"
-        
+
         if not os.path.exists(candidate):
             return candidate
         counter += 1
@@ -1059,10 +1078,10 @@ async def update_stash_file(scene_id: str, file_id: str, new_file_path: str):
     """Update Stash with the new file information"""
     config = get_config()
     path_mappings = config.get('path_mappings', [])
-    
+
     # Convert the host path back to Docker path for Stash
     docker_path = apply_path_mappings(new_file_path, path_mappings)
-    
+
     # This mutation would update the file path in Stash
     # You'll need to adjust this based on your Stash GraphQL schema
     mutation = """
@@ -1073,12 +1092,12 @@ async def update_stash_file(scene_id: str, file_id: str, new_file_path: str):
       }
     }
     """
-    
+
     variables = {
         "id": file_id,
         "path": docker_path
     }
-    
+
     try:
         await stash_request(mutation, variables)
         logger.info(f"Updated Stash file {file_id} with new path: {docker_path}")
@@ -1095,7 +1114,7 @@ async def sse_endpoint(request: Request):
             while True:
                 if await request.is_disconnected():
                     break
-                
+
                 # Create serializable conversion status
                 serializable_queue = []
                 for task in conversion_queue:
@@ -1113,7 +1132,7 @@ async def sse_endpoint(request: Request):
                         "error": task.error
                     }
                     serializable_queue.append(task_data)
-                
+
                 current_config = get_config()
                 status_data = {
                     "queue": serializable_queue,
@@ -1125,7 +1144,7 @@ async def sse_endpoint(request: Request):
                 await asyncio.sleep(1)
         finally:
             sse_clients.discard(client_id)
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
