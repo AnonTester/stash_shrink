@@ -172,6 +172,7 @@ class StashShrinkApp {
         document.getElementById('clear-completed').addEventListener('click', () => this.clearCompleted());
         document.getElementById('toggle-pause').addEventListener('click', () => this.toggleQueuePause());
 
+
         // Pagination - Top controls
         document.getElementById('page-size-top').addEventListener('change', (e) => {
             this.pageSize = e.target.value === 'all' ? Infinity : parseInt(e.target.value);
@@ -232,6 +233,20 @@ class StashShrinkApp {
                 return false;
             }
         });
+
+        // Event delegation for conversion table buttons
+        document.querySelector('#conversion-table').addEventListener('click', (e) => {
+            const button = e.target.closest('button');
+            if (!button) return;
+
+            const taskId = button.getAttribute('data-task-id');
+            const action = button.getAttribute('data-action');
+
+            if (action === 'cancel' && taskId) this.cancelConversion(taskId);
+            if (action === 'remove' && taskId) this.removeFromQueue(taskId);
+            if (action === 'show-log' && taskId) this.showLog(taskId);
+            if (action === 'retry' && taskId) this.retryConversion(taskId);
+        });        
     }
 
     // Enhanced pagination methods
@@ -456,6 +471,72 @@ class StashShrinkApp {
         } catch (error) {
             console.error('Error saving settings:', error);
             this.showToast('Error saving settings: ' + error.message, 'error');
+        }
+    }
+
+    async cancelConversion(taskId) {
+        try {
+            const response = await fetch(`/api/cancel-conversion/${taskId}`, { method: 'POST' });
+            if (response.ok) {
+                this.showToast('Conversion cancelled', 'success');
+            } else {
+                throw new Error('Failed to cancel conversion');
+            }
+        } catch (error) {
+            console.error('Failed to cancel conversion:', error);
+            this.showToast('Failed to cancel conversion: ' + error.message, 'error');
+        }
+     }
+ 
+    async showLog(taskId) {
+        try {
+            // Fetch the actual log content from the server
+            const response = await fetch(`/api/conversion-log/${taskId}`);
+            if (response.ok) {
+                const logData = await response.json();
+                const logContent = logData.log || 'No log content available';
+                document.getElementById('log-content').textContent = logContent;
+                document.getElementById('log-modal').style.display = 'block';
+            } else {
+                throw new Error('Failed to fetch log');
+            }
+        } catch (error) {
+            console.error('Failed to load log:', error);
+            document.getElementById('log-content').textContent = 'Error loading log: ' + error.message;
+            document.getElementById('log-modal').style.display = 'block';
+        }
+    }
+
+    hideLogModal() {
+        document.getElementById('log-modal').style.display = 'none';
+        document.getElementById('log-content').textContent = '';
+    }
+
+    async retryConversion(taskId) {
+        try {
+            const response = await fetch(`/api/retry-conversion/${taskId}`, { method: 'POST' });
+            if (response.ok) {
+                this.showToast('Conversion retried', 'success');
+            } else {
+                throw new Error('Failed to retry conversion');
+            }
+        } catch (error) {
+            console.error('Failed to retry conversion:', error);
+            this.showToast('Failed to retry conversion: ' + error.message, 'error');
+        }
+    }
+
+    async removeFromQueue(taskId) {
+        try {
+            const response = await fetch(`/api/remove-from-queue/${taskId}`, { method: 'POST' });
+            if (response.ok) {
+                this.showToast('Task removed from queue', 'success');
+            } else {
+                throw new Error('Failed to remove task from queue');
+            }
+        } catch (error) {
+            console.error('Failed to remove from queue:', error);
+            this.showToast('Failed to remove task from queue: ' + error.message, 'error');
         }
     }
 
@@ -795,7 +876,7 @@ class StashShrinkApp {
         try {
             const response = await fetch('/api/toggle-pause', { method: 'POST' });
             if (response.ok) {
-                const result = await response.json().catch(() => ({}));
+                const result = await response.json();
                 this.isQueuePaused = result.paused;
                 this.updatePauseButton();
                 this.showToast(`Queue ${this.isQueuePaused ? 'paused' : 'resumed'}`, 'info');
@@ -810,7 +891,7 @@ class StashShrinkApp {
         const btn = document.getElementById('toggle-pause');
         if (btn) {
             btn.textContent = this.isQueuePaused ? 'Resume Queue' : 'Pause Queue';
-            btn.className = this.isQueuePaused ? 'btn btn-success' : 'btn btn-secondary';
+            btn.className = `btn ${this.isQueuePaused ? 'btn-success' : 'btn-secondary'}`;
         }
     }
 
@@ -926,7 +1007,7 @@ class StashShrinkApp {
         const hasAnyTasks = buttonStates.hasAnyTasks;
 
         // Show conversion button if there are tasks (only when we're on search page)
-        if (hasAnyTasks && this.conversionSection.style.display === 'none') {
+        if (hasAnyTasks && this.conversionSection && this.conversionSection.style.display === 'none') {
             this.showConversionBtn.style.display = 'inline-block';
         }
 
@@ -982,14 +1063,14 @@ class StashShrinkApp {
                 </td>
                 <td class="conversion-actions">
                     ${task.status === 'error' ?
-                        `<button class="btn btn-secondary btn-sm" onclick="app.showLog('${task.task_id}')">Log</button>
-                         <button class="btn btn-primary btn-sm" onclick="app.retryConversion('${task.task_id}')">Retry</button>` :
+                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log">Log</button>
+                         <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry">Retry</button>` : 
                         ''}
-                    ${task.status === 'pending' || task.status === 'processing' ?
-                        `<button class="btn btn-danger btn-sm" onclick="app.cancelConversion('${task.task_id}')">Cancel</button>` :
+                    ${task.status === 'processing' ?
+                        `<button class="btn btn-danger btn-sm" data-task-id="${task.task_id}" data-action="cancel">Cancel</button>` : 
                         ''}
-                    ${task.status === 'completed' ?
-                        `<button class="btn btn-secondary btn-sm" onclick="app.removeFromQueue('${task.task_id}')">Remove</button>` :
+                    ${task.status === 'pending' || task.status === 'completed' ?
+                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove">Remove</button>` : 
                         ''}
                 </td>
             `;

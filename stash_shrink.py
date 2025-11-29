@@ -543,6 +543,26 @@ async def search_scenes(search_params: SearchParams):
             detail=f"Internal server error during search: {str(e)}"
         )
 
+@app.get("/api/conversion-log/{task_id}")
+async def get_conversion_log(task_id: str):
+    """Get the log content for a specific conversion task"""
+    try:
+        # Find the task in the queue
+        task = next((t for t in conversion_queue if t.task_id == task_id), None)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        # Read the log file
+        if os.path.exists(task.log_file):
+            with open(task.log_file, 'r') as f:
+                log_content = f.read()
+            return {"log": log_content}
+        else:
+            return {"log": "Log file not found"}
+    except Exception as e:
+        logger.error(f"Failed to read log for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to read log: {str(e)}")
+
 @app.post("/api/queue-conversion")
 async def queue_conversion(scene_ids: List[str]):
     config = get_config()
@@ -728,6 +748,32 @@ async def remove_from_queue(task_id: str):
 
     save_queue_state()
     return {"status": "removed", "count": removed_count}
+
+@app.post("/api/retry-conversion/{task_id}")
+async def retry_conversion(task_id: str):
+    """Retry a failed conversion task"""
+    global conversion_queue
+    
+    try:
+        # Find the task in the queue
+        task_index = next((i for i, t in enumerate(conversion_queue) if t.task_id == task_id), -1)
+        if task_index == -1:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        task = conversion_queue[task_index]
+        
+        # Reset task status to pending for retry
+        task.status = "pending"
+        task.progress = 0.0
+        task.eta = None
+        task.error = None
+        
+        save_queue_state()
+        logger.info(f"Retrying conversion task {task_id} for scene: {task.scene.title}")
+        return {"status": "retried"}
+    except Exception as e:
+        logger.error(f"Failed to retry conversion task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retry conversion: {str(e)}")
 
 async def process_conversion_queue():
     config = get_config()
