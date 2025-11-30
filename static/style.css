@@ -555,9 +555,9 @@ input, select {
 
 .conversion-section .data-table th:nth-child(4),
 .conversion-section .data-table td:nth-child(4) {
-    width: 90px; /* Actions - fixed width */
-    min-width: 90px;
-    max-width: 90px;
+    width: 124px; /* Actions - fixed width */
+    min-width: 124px;
+    max-width: 124px;
     text-align: right;
 }
 

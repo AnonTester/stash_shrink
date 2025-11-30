@@ -248,6 +248,12 @@ async def stash_request(graphql_query: str, variables: dict = None):
                 json={"query": graphql_query, "variables": variables},
                 headers=headers
             )
+
+            # Log the full response for debugging
+            logger.debug(f"Stash response status: {response.status_code}")
+            if response.status_code != 200:
+                logger.debug(f"Stash response body: {response.text}")
+
             response.raise_for_status()
             result = response.json()
 
@@ -281,6 +287,13 @@ async def stash_request(graphql_query: str, variables: dict = None):
         logger.error(f"GraphQL Query that failed: {graphql_query}")
         if variables:
             logger.error(f"GraphQL Variables: {variables}")
+
+        # Log the response body for more details
+        try:
+            error_body = e.response.text
+            logger.error(f"Stash response body: {error_body}")
+        except:
+            pass
 
         # Try to get more details from the response
         error_detail = f"Stash returned error {e.response.status_code}"
@@ -649,7 +662,7 @@ async def conversion_status():
         "queue": [task.dict() for task in conversion_queue],
         "active": list(active_tasks),
         "completed": [task.dict() for task in conversion_queue if task.status in ["completed", "error"]],
-        "paused": config.get('paused', False)
+        "paused": config.get('paused', True)  # Default to paused
     }
 
 @app.post("/api/cancel-conversion/{task_id}")
@@ -723,7 +736,7 @@ async def cancel_all_conversions():
 @app.post("/api/toggle-pause")
 async def toggle_pause():
     config = get_config()
-    config['paused'] = not config.get('paused', False)
+    config['paused'] = not config.get('paused', True)  # Default to True (paused)
     save_config(config)
     return {"status": "ok", "paused": config['paused']}
 
@@ -797,7 +810,7 @@ async def retry_conversion(task_id: str):
 async def process_conversion_queue():
     config = get_config()
 
-    # Don't process if paused
+    # Don't process if paused (default state)
     if config.get('paused', False):
         return
 
@@ -1081,29 +1094,46 @@ async def update_stash_file(scene_id: str, file_id: str, new_file_path: str):
 
     # Convert the host path back to Docker path for Stash
     docker_path = apply_path_mappings(new_file_path, path_mappings)
+    # Ensure the log file is created and writable
+    #log_dir = os.path.dirname(task.log_file)
+    #os.makedirs(log_dir, exist_ok=True)
+    new_basename = os.path.basename(docker_path)
 
-    # This mutation would update the file path in Stash
-    # You'll need to adjust this based on your Stash GraphQL schema
-    mutation = """
-    mutation UpdateFile($id: ID!, $path: String!) {
-      fileUpdate(input: { id: $id, path: $path }) {
-        id
-        path
-      }
-    }
-    """
+    # Use execSQL mutation to directly update the files table
+    import time
+    updated_at = int(time.time())
 
-    variables = {
-        "id": file_id,
-        "path": docker_path
-    }
+    # Format the SQL string directly (be careful with SQL injection - we control the values)
+    sql = f"UPDATE files SET basename = '{new_basename}', updated_at = {updated_at} WHERE id = {file_id};"
+
+    exec_sql_mutation = f"""
+    mutation ExecSQL {{
+      execSQL( sql: "{sql}" ) {{
+        rows_affected
+      }}
+     }}
+     """
 
     try:
-        await stash_request(mutation, variables)
-        logger.info(f"Updated Stash file {file_id} with new path: {docker_path}")
+        logger.info(f"Updating Stash file {file_id} with execSQL: {sql}")
+        await stash_request(exec_sql_mutation, {})
+        logger.info(f"Successfully updated Stash file {file_id} with new basename: {new_basename}")
     except Exception as e:
-        logger.error(f"Failed to update Stash file {file_id}: {e}")
-        # Don't fail the conversion if Stash update fails
+        logger.error(f"Failed to update Stash file via execSQL: {e}")
+        raise Exception(f"Stash database update failed: {str(e)}")
+
+    # Trigger metadata scan to update file properties
+    scan_mutation = """
+    mutation ScanFile($path: String!) {
+      metadataScan(input: { paths: [$path] })
+    }
+    """
+    try:
+        await stash_request(scan_mutation, {"path": docker_path})
+        logger.info(f"Triggered metadata scan for: {docker_path}")
+    except Exception as e:
+        logger.warning(f"Metadata scan failed (non-critical): {e}")
+        # Don't fail the entire process if scan fails, as the DB update was successful
 
 @app.get("/sse")
 async def sse_endpoint(request: Request):

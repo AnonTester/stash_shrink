@@ -10,7 +10,7 @@ class StashShrinkApp {
         this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
         this.handleFirstRun();
         this.queuedSceneIds = new Set();
-        this.isQueuePaused = false;
+        this.isQueuePaused = true; // Default to paused
         this.totalPages = 1;
 
         // Store section references
@@ -867,7 +867,7 @@ class StashShrinkApp {
                 throw new Error('Failed to queue conversion');
             }
         } catch (error) {
-            console.error('Conversion queue failed:', error);
+            console.error('Add to queue failed:', error);
             this.showToast('Failed to queue conversion: ' + error.message, 'error');
         }
     }
@@ -877,10 +877,17 @@ class StashShrinkApp {
             const response = await fetch('/api/toggle-pause', { method: 'POST' });
             if (response.ok) {
                 const result = await response.json();
+                console.log('toggle-pause response data:', result);
                 this.isQueuePaused = result.paused;
                 this.updatePauseButton();
-                this.showToast(`Queue ${this.isQueuePaused ? 'paused' : 'resumed'}`, 'info');
-                if (!this.isQueuePaused) this.startQueueProcessing();
+                this.showToast(`Queue ${this.isQueuePaused ? 'paused' : 'started'}`, 'info');
+                if (!this.isQueuePaused) {
+                    // Force start processing when starting
+                    console.log('Queue started, starting processing...')
+                    await this.startQueueProcessing();
+                    this.showToast('Queue processing started', 'success');
+                }
+                console.log(`Queue ${this.isQueuePaused ? 'paused' : 'resumed and processing started'}`);
             }
         } catch (error) {
             console.error('Failed to toggle pause:', error);
@@ -891,8 +898,8 @@ class StashShrinkApp {
     updatePauseButton() {
         const btn = document.getElementById('toggle-pause');
         if (btn) {
-            btn.textContent = this.isQueuePaused ? 'Resume Queue' : 'Pause Queue';
-            btn.className = `btn ${this.isQueuePaused ? 'btn-success' : 'btn-secondary'}`;
+            btn.textContent = this.isQueuePaused ? 'Start Queued Tasks' : 'Pause Task Queue';
+            btn.className = `btn ${this.isQueuePaused ? 'btn-primary' : 'btn-secondary'}`;
         }
     }
 
@@ -1006,7 +1013,7 @@ class StashShrinkApp {
 
         // Update pause button state
         this.updatePauseButton();
-        document.getElementById('toggle-pause').disabled = hasActiveOrPending && this.isQueuePaused;
+        document.getElementById('toggle-pause').disabled = !hasActiveOrPending;
 
         return {
             hasActiveOrPending, hasCompleted, hasErrors,
@@ -1057,7 +1064,10 @@ class StashShrinkApp {
             const isError = task.status === 'error';
             const fileName = task.scene.files && task.scene.files.length > 0 ?
                 task.scene.files[0].basename : 'Unknown file';
-            const etaText = task.eta && task.eta > 0 ? this.formatTime(task.eta) : 'Calculating...';
+
+            // Only show ETA for processing tasks
+            const etaText = task.status === 'processing' && task.eta && task.eta > 0 ?
+                this.formatTime(task.eta) : '';
 
             row.innerHTML = `
                 <td class="conversion-title">
@@ -1071,7 +1081,7 @@ class StashShrinkApp {
                     </div>
                     <div style="display: flex; justify-content: space-between; font-size: 0.875rem; margin-top: 0.25rem;">
                         <span>${task.progress.toFixed(1)}%</span>
-                        <span style="color: var(--secondary-color);">ETA: ${etaText}</span>
+                        ${etaText ? `<span style="color: var(--secondary-color);">ETA: ${etaText}</span>` : ''}
                     </div>
                 </td>
                 <td class="conversion-actions">
@@ -1109,14 +1119,17 @@ class StashShrinkApp {
         if (activeProcessingTasks.length > 0) {
             // Use the maximum ETA among active tasks
             const maxEta = Math.max(...activeProcessingTasks.map(task => task.eta || 0));
-            document.getElementById('eta-text').textContent = `ETA: ${this.formatTime(maxEta)}`;
+            const etaElement = document.getElementById('eta-text');
+            etaElement.textContent = `ETA: ${this.formatTime(maxEta)}`;
+            etaElement.style.display = 'block';
         } else if (processing > 0) {
-            // Fallback ETA calculation
-            const remaining = total - completed;
-            const estimatedTime = remaining * 60; // Placeholder: 1 minute per remaining item
-            document.getElementById('eta-text').textContent = `ETA: ${this.formatTime(estimatedTime)}`;
+            // Processing but no ETA yet
+            const etaElement = document.getElementById('eta-text');
+            etaElement.textContent = 'ETA: Calculating...';
+            etaElement.style.display = 'block';
         } else {
-            document.getElementById('eta-text').textContent = 'ETA: --';
+            // No active processing tasks
+            document.getElementById('eta-text').style.display = 'none';
         }
     }
 
