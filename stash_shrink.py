@@ -40,7 +40,6 @@ DEFAULT_CONFIG = {
     "overwrite_original": True,  # Default to overwrite behavior
     "default_search_limit": 50,
     "max_concurrent_tasks": 2,
-    "delete_original": True,
     "video_settings": {
         "width": 1280,
         "height": 720,
@@ -49,8 +48,7 @@ DEFAULT_CONFIG = {
         "buffer_size": "2000k",
         "container": "mp4"
     },
-    "path_mappings": [],
-    "paused": False
+    "path_mappings": []
 }
 
 # Global state
@@ -69,8 +67,6 @@ class Settings(BaseModel):
     api_key: str
     default_search_limit: int
     max_concurrent_tasks: int
-    delete_original: bool
-    paused: bool = False
     overwrite_original: bool = True  # New setting for overwrite behavior
     video_settings: Dict[str, Any]
     path_mappings: List[str]
@@ -735,18 +731,20 @@ async def cancel_all_conversions():
 
     return {"status": "cancelled", "count": cancelled_count}
 
+# Runtime queue state (not persisted)
+queue_paused = True
+
 @app.post("/api/toggle-pause")
 async def toggle_pause():
-    config = get_config()
-    config['paused'] = not config.get('paused', True)  # Default to True (paused)
-    save_config(config)
-    return {"status": "ok", "paused": config['paused']}
+    global queue_paused
+    queue_paused = not queue_paused
+    return {"status": "ok", "paused": queue_paused}
 
 @app.post("/api/start-processing")
 async def start_processing():
     """Start processing the queue if not paused"""
-    config = get_config()
-    if not config.get('paused', False) and conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
+    global queue_paused
+    if not queue_paused and conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
         asyncio.create_task(process_conversion_queue())
     return {"status": "processing_started"}
 
@@ -812,8 +810,8 @@ async def retry_conversion(task_id: str):
 async def process_conversion_queue():
     config = get_config()
 
-    # Don't process if paused (default state)
-    if config.get('paused', False):
+    global queue_paused
+    if queue_paused:
         return
 
     while conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
@@ -911,7 +909,6 @@ class FFmpegProgress:
 
 async def convert_video(task: ConversionTask):
     config = get_config()
-    delete_original = config.get('delete_original', True)
     overwrite_original = config.get('overwrite_original', True)
     video_settings = config['video_settings']
     original_extension = os.path.splitext(input_file)[1].lower()
@@ -955,7 +952,7 @@ async def convert_video(task: ConversionTask):
             log.write(f"Starting conversion: {input_file} -> {final_output}\n")
             log.write(f"File duration: {file_duration} seconds\n")
             log.write(f"FFmpeg command: {ffmpeg_cmd}\n")
-            log.write(f"Delete original: {delete_original}\n")
+            log.write(f"Overwrite original: {overwrite_original}\n")
             log.write("-" * 80 + "\n")
 
         # Start time for ETA calculation
@@ -1020,11 +1017,8 @@ async def convert_video(task: ConversionTask):
         with open(task.log_file, 'a') as log:
             log.write("-" * 80 + "\n")
             log.write(f"FFmpeg process completed with return code: {process.returncode}\n")
-            log.write(f"Delete original setting: {delete_original}\n")
-            if input_file and os.path.exists(input_file):
-                log.write(f"Original file exists: {input_file}\n")
-            else:
-                log.write(f"Original file not found: {input_file}\n")
+            log.write(f"Overwrite original setting: {overwrite_original}\n")
+            log.write(f"Original file exists: {os.path.exists(input_file) if input_file else 'N/A'}\n")
 
             if stdout:
                 log.write(f"STDOUT: {stdout}\n")
@@ -1060,7 +1054,7 @@ async def convert_video(task: ConversionTask):
                     await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original)
 
                     # Delete original only after successful Stash update
-                    if delete_original and os.path.exists(input_file):
+                    if overwrite_original and os.path.exists(input_file):
                         os.remove(input_file)
                         logger.info(f"Deleted original file: {input_file}")
 
@@ -1079,14 +1073,14 @@ async def convert_video(task: ConversionTask):
                 # Add as new file to Stash scene
                 await add_file_to_scene(task.scene.id, final_output, overwrite_original)
 
-            # Delete original file if configured
+            # Delete original file if overwrite is enabled
             # Only delete if overwrite is enabled and we haven't already deleted it
-            if delete_original and overwrite_original and original_extension == new_extension:
+            if overwrite_original and original_extension == new_extension:
                 # Already deleted above in the same extension case
                 pass
             else:
                 original_file_exists = os.path.exists(input_file)
-                if delete_original and original_file_exists and overwrite_original:
+                if original_file_exists and overwrite_original:
                     os.remove(input_file)
                     logger.info(f"Deleted original file: {input_file}")
                 elif not overwrite_original:
@@ -1107,7 +1101,6 @@ async def convert_video(task: ConversionTask):
         task.status = "error"
         task.error = str(e)
         logger.error(f"Conversion failed for {task.scene.files[0].path if task.scene.files else 'unknown'}: {e}")
-        logger.info(f"Delete original setting: {delete_original}")
         logger.info(f"Overwrite original setting: {overwrite_original}")
 
         # Clean up temporary file if it exists
@@ -1281,10 +1274,11 @@ async def sse_endpoint(request: Request):
                     serializable_queue.append(task_data)
 
                 current_config = get_config()
+                # Queue pause state is now runtime-only, default to True (paused)
                 status_data = {
                     "queue": serializable_queue,
                     "active": list(active_tasks),
-                    "paused": current_config.get('paused', False)
+                    "paused": True  # Default to paused on app start
                 }
 
                 yield f"data: {json.dumps(status_data)}\n\n"

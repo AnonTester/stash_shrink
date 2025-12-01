@@ -10,7 +10,7 @@ class StashShrinkApp {
         this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
         this.handleFirstRun();
         this.queuedSceneIds = new Set();
-        this.isQueuePaused = true; // Default to paused
+        this.isQueuePaused = true; // Runtime-only state, default to paused
         this.totalPages = 1;
 
         // Store section references
@@ -39,7 +39,7 @@ class StashShrinkApp {
             const statusData = await response.json();
 
             // Load pause state
-            this.isQueuePaused = statusData.paused || false;
+            this.isQueuePaused = statusData.paused !== undefined ? statusData.paused : true;
 
             // Track queued scene IDs
             this.updateQueuedSceneIds(statusData.queue);
@@ -425,9 +425,9 @@ class StashShrinkApp {
             const settings = {
                 stash_url: formData.get('stash_url'),
                 api_key: formData.get('api_key'),
+                overwrite_original: formData.get('overwrite_original') === 'on',
                 default_search_limit: parseInt(formData.get('default_search_limit')) || 50,
                 max_concurrent_tasks: parseInt(formData.get('max_concurrent_tasks')) || 2,
-                delete_original: formData.get('delete_original') === 'on',
                 path_mappings: formData.get('path_mappings') ? formData.get('path_mappings').split('\n').filter(m => m.trim()) : [],
                 video_settings: {
                     width: parseInt(formData.get('width')) || 1280,
@@ -982,7 +982,7 @@ class StashShrinkApp {
     }
 
     updateConversionStatus(statusData) {
-        this.isQueuePaused = statusData.paused || false;
+        this.isQueuePaused = statusData.paused !== undefined ? statusData.paused : true;
         this.renderConversionTable(statusData.queue);
         this.updateQueuedSceneIds(statusData.queue);
         this.updateProgressOverview(statusData.queue, statusData.active);
