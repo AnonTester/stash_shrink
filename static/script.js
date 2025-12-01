@@ -7,6 +7,7 @@ class StashShrinkApp {
         this.sortField = null;
         this.sortDirection = null;
         this.eventSource = null;
+        this.lastConversionStatus = null; // Cache last conversion status
         this.isFirstRun = document.body.getAttribute('data-show-settings') === 'True';
         this.handleFirstRun();
         this.queuedSceneIds = new Set();
@@ -29,7 +30,40 @@ class StashShrinkApp {
         this.initializeEventListeners();
         this.loadConfig();
 
+         // Add page visibility listener
+        this.setupVisibilityListener();
+
         this.checkInitialView();
+    }
+
+    setupVisibilityListener() {
+        // Handle page visibility changes
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                this.pauseSSE();
+            } else {
+                this.resumeSSE();
+            }
+        });
+    }
+
+    pauseSSE() {
+        if (this.eventSource) {
+            console.log('Pausing SSE due to page visibility change');
+            this.eventSource.close();
+            this.eventSource = null;
+        }
+    }
+
+    resumeSSE() {
+        // Only resume if we're in the conversion section or have active tasks
+        if (this.conversionSection && this.conversionSection.style.display === 'block') {
+            console.log('Resuming SSE after page visibility restored');
+            // Start SSE without blocking UI
+            this.startSSE().catch(error => {
+                console.error('Failed to resume SSE:', error);
+            });
+        }
     }
 
     async checkInitialView() {
@@ -40,6 +74,11 @@ class StashShrinkApp {
 
             // Load pause state
             this.isQueuePaused = statusData.paused !== undefined ? statusData.paused : true;
+
+            // Store the initial conversion status
+            this.lastConversionStatus = statusData;
+            this.updateQueuedSceneIds(statusData.queue);
+            this.updateConversionUI(statusData.queue);
 
             // Track queued scene IDs
             this.updateQueuedSceneIds(statusData.queue);
@@ -59,11 +98,25 @@ class StashShrinkApp {
     }
 
     updateQueuedSceneIds(queue) {
-        this.queuedSceneIds.clear();
-        if (queue) {
-            queue.forEach(task => this.queuedSceneIds.add(task.scene.id));
+        // Only update if there's an actual change
+        const newIds = new Set(queue ? queue.map(task => task.scene.id) : []);
+        if (this.setsAreEqual(this.queuedSceneIds, newIds)) {
+            return; // No change, don't re-render
         }
-        this.renderResults(); // Update checkboxes if results are displayed
+
+        this.queuedSceneIds = newIds;
+        // Only render results if they're currently displayed
+        if (this.resultsSection.style.display !== 'none') {
+            this.renderResults();
+        }
+    }
+
+    setsAreEqual(set1, set2) {
+        if (set1.size !== set2.size) return false;
+        for (let item of set1) {
+            if (!set2.has(item)) return false;
+        }
+        return true;
     }
 
     initializeToastSystem() {
@@ -311,10 +364,6 @@ class StashShrinkApp {
         document.getElementById('total-pages-top').textContent = `of ${this.totalPages}`;
         document.getElementById('total-pages-bottom').textContent = `of ${this.totalPages}`;
 
-        // Update page info
-        document.getElementById('page-info-top').textContent = `Page ${this.currentPage} of ${this.totalPages}`;
-        document.getElementById('page-info-bottom').textContent = `Page ${this.currentPage} of ${this.totalPages}`;
-
         // Update results count
         const resultsText = `${totalItems} result${totalItems !== 1 ? 's' : ''}`;
         document.getElementById('results-count-top').textContent = resultsText;
@@ -549,6 +598,14 @@ class StashShrinkApp {
         tbody.innerHTML = '';
 
         if (!this.currentResults || this.currentResults.length === 0) {
+            // Only update DOM if we're actually showing the results section
+            if (this.resultsSection.style.display !== 'block') {
+                if (tableContainer) tableContainer.style.display = 'none';
+                paginationControls.forEach(control => control.style.display = 'none');
+                if (resultsControls) resultsControls.style.display = 'none';
+                return;
+            }
+
             // Hide entire results section when no results
             if (this.resultsSection) this.resultsSection.style.display = 'none';
             if (tableContainer) tableContainer.style.display = 'none';
@@ -921,6 +978,8 @@ class StashShrinkApp {
     }
 
     showConversionSection() {
+        console.log('Showing conversion section');
+
         // Hide other sections
         if (this.searchSection) this.searchSection.style.display = 'none';
         if (this.resultsSection) this.resultsSection.style.display = 'none';
@@ -932,8 +991,34 @@ class StashShrinkApp {
         this.showSearchBtn.style.display = 'inline-block';
         this.showConversionBtn.style.display = 'none';
 
+        // Update UI with cached data immediately
+        if (this.lastConversionStatus) {
+            console.log('Using cached conversion status:', this.lastConversionStatus);
+            this.updateConversionStatus(this.lastConversionStatus);
+        } else {
+            // If no cached data, fetch current status
+            console.log('No cached data, fetching current conversion status');
+            this.fetchAndUpdateConversionStatus();
+        }
+
         this.updatePauseButton();
-        this.startSSE();
+
+        // Start SSE when showing conversion section
+        // Start SSE without blocking UI
+        this.startSSE().catch(error => {
+            console.error('Failed to start SSE:', error);
+        });
+    }
+
+    async fetchAndUpdateConversionStatus() {
+        try {
+            const response = await fetch('/api/conversion-status');
+            const statusData = await response.json();
+            this.updateConversionStatus(statusData);
+        } catch (error) {
+            console.error('Failed to fetch conversion status:', error);
+            this.showToast('Failed to load conversion queue', 'error');
+        }
     }
 
     showSearchSection() {
@@ -950,23 +1035,47 @@ class StashShrinkApp {
 
         // Update navigation buttons - show "View Conversion Queue" when we're on search page
         this.showSearchBtn.style.display = 'none';
-        this.showConversionBtn.style.display = 'inline-block';
+        if (this.lastConversionStatus && this.lastConversionStatus.queue && this.lastConversionStatus.queue.length > 0) {
+            this.showConversionBtn.style.display = 'inline-block';
+        }
+
+        // Pause SSE when not viewing conversion section to reduce load
+        this.pauseSSE();
     }
 
-    startSSE() {
-        // Don't start multiple SSE connections
-        if (this.eventSource && this.eventSource.readyState !== EventSource.CLOSED) {
+    async startSSE() {
+        // Close existing connection if any
+        if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+        }
+
+        // Don't start if page is hidden
+        if (document.hidden) {
+            console.log('Page is hidden, deferring SSE start');
             return;
         }
 
-        if (this.eventSource) {
-            this.eventSource.close();
-        }
+        console.log('Starting SSE connection');
+
+        // Ensure we have current data before starting SSE
+        await this.ensureInitialConversionStatus();
 
         this.eventSource = new EventSource('/sse');
+
+        let lastDataHash = null;
+
         this.eventSource.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            this.updateConversionStatus(data);
+
+            // Create a simple hash to detect actual changes
+            const dataHash = JSON.stringify(data.queue) + '|' + data.paused;
+
+            // Only update if data has actually changed
+            if (dataHash !== lastDataHash) {
+                lastDataHash = dataHash;
+                this.updateConversionStatus(data);
+            }
         };
 
         this.eventSource.onerror = (error) => {
@@ -976,17 +1085,43 @@ class StashShrinkApp {
             } else {
                 console.error('SSE error:', error);
                 // Attempt to reconnect after 5 seconds
-                setTimeout(() => this.startSSE(), 5000);
+                if (!document.hidden) {
+                    setTimeout(() => this.startSSE(), 5000);
+                }
             }
         };
     }
 
+    async ensureInitialConversionStatus() {
+
+        if (!this.lastConversionStatus) {
+            try {
+                console.log('Fetching initial conversion status before starting SSE');
+                const response = await fetch('/api/conversion-status');
+                const statusData = await response.json();
+                this.lastConversionStatus = statusData;
+                // Update UI with initial data
+                if (this.conversionSection && this.conversionSection.style.display === 'block') {
+                    this.updateConversionStatus(statusData);
+                }
+            } catch (error) {
+                console.error('Failed to fetch initial conversion status:', error);
+            }
+        }
+    }
+
     updateConversionStatus(statusData) {
-        this.isQueuePaused = statusData.paused !== undefined ? statusData.paused : true;
-        this.renderConversionTable(statusData.queue);
-        this.updateQueuedSceneIds(statusData.queue);
-        this.updateProgressOverview(statusData.queue, statusData.active);
-        this.updateConversionUI(statusData.queue);
+        // Store the latest status data
+        this.lastConversionStatus = statusData;
+
+        // Only update if we have valid data
+        if (statusData && statusData.queue !== undefined) {
+            this.isQueuePaused = statusData.paused !== undefined ? statusData.paused : true;
+            this.renderConversionTable(statusData.queue);
+            this.updateQueuedSceneIds(statusData.queue);
+            this.updateProgressOverview(statusData.queue, statusData.active);
+            this.updateConversionUI(statusData.queue);
+        }
     }
 
     updateButtonStates(queue) {

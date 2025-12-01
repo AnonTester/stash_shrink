@@ -522,13 +522,6 @@ input, select {
     white-space: nowrap;
 }
 
-/* Page info */
-#page-info-top,
-#page-info-bottom {
-    font-weight: 500;
-    white-space: nowrap;
-}
-
 /* Conversion progress */
 .conversion-section .data-table {
     table-layout: fixed;

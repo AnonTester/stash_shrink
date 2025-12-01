@@ -1,5 +1,6 @@
 import os
 import json
+from contextlib import asynccontextmanager
 import asyncio
 import logging
 from pathlib import Path
@@ -22,12 +23,6 @@ import uvicorn
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-app = FastAPI(title="Stash Shrink")
-
-# Mount static files and templates
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 
 # Configuration
 CONFIG_FILE = "config.json"
@@ -52,6 +47,8 @@ DEFAULT_CONFIG = {
 }
 
 # Global state
+queue_initialized = False
+last_sse_data = None  # Cache last sent SSE data to prevent duplicate sends
 conversion_queue = []
 conversion_tasks = {}
 active_tasks = set()
@@ -128,6 +125,33 @@ class ConversionTask(BaseModel):
     output_file: Optional[str] = None
     error: Optional[str] = None
 
+# Lifespan event handler for startup/shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting up Stash Shrink")
+    initialize_queue_system()
+    # Queue starts paused by default
+    global queue_paused
+    queue_paused = True
+    yield
+    # Shutdown
+    logger.info("Shutting down Stash Shrink")
+    # Clean up any active tasks
+    for task_id in list(active_tasks):
+        task = task_status.get(task_id)
+        if task and task.status == "processing":
+            task.status = "pending"  # Reset to pending so it can be resumed
+            logger.info(f"Reset active task {task_id} to pending on shutdown")
+    save_queue_state()  # Save queue state on shutdown
+
+# Create FastAPI app with lifespan
+app = FastAPI(title="Stash Shrink", lifespan=lifespan)
+
+# Mount static files and templates
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
 def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r') as f:
@@ -176,13 +200,20 @@ def save_queue_state():
         with open(QUEUE_STATE_FILE, 'w') as f:
             json.dump(queue_data, f, indent=2)
     except Exception as e:
-        logger.error(f"Failed to save queue state: {e}")
+        logger.error(f"Failed to save queue state to {QUEUE_STATE_FILE}: {e}")
 
 def load_queue_state():
     """Load the conversion queue from disk"""
     global conversion_queue
+    global task_status
+
+    # Clear existing queue to avoid duplicates
+    conversion_queue.clear()
+    task_status.clear()
+
     if os.path.exists(QUEUE_STATE_FILE):
         try:
+            logger.info(f"Loading queue state from {QUEUE_STATE_FILE}")
             with open(QUEUE_STATE_FILE, 'r') as f:
                 queue_data = json.load(f)
 
@@ -200,15 +231,14 @@ def load_queue_state():
                 )
                 conversion_queue.append(task)
 
-                # Rebuild task_status
-                task_status[task_data["task_id"]] = task
-
             logger.info(f"Loaded {len(conversion_queue)} tasks from queue state")
         except Exception as e:
             logger.error(f"Failed to load queue state: {e}")
 
-# Load queue state on startup
-load_queue_state()
+def initialize_queue_system():
+    """Initialize the queue system - called once on app startup"""
+    load_queue_state()
+    logger.info(f"Queue system initialized with {len(conversion_queue)} tasks")
 
 def apply_path_mappings(file_path: str, path_mappings: List[str]) -> str:
     """
@@ -663,7 +693,9 @@ async def queue_conversion(scene_ids: List[str]):
 
 @app.get("/api/conversion-status")
 async def conversion_status():
+    global queue_paused
     config = get_config()
+
     return {
         "queue": [task.dict() for task in conversion_queue],
         "active": list(active_tasks),
@@ -749,6 +781,7 @@ def initialize_queue_state():
 async def toggle_pause():
     global queue_paused
     queue_paused = not queue_paused
+    clear_sse_cache()  # Force SSE update when pause state changes
     return {"status": "ok", "paused": queue_paused}
 
 @app.post("/api/start-processing")
@@ -758,6 +791,7 @@ async def start_processing():
     config = get_config()
     if not queue_paused and conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
         asyncio.create_task(process_conversion_queue())
+    clear_sse_cache()  # Force SSE update
     return {"status": "processing_started"}
 
 @app.post("/api/remove-from-queue/{task_id}")
@@ -832,17 +866,10 @@ async def process_conversion_queue():
             active_tasks.add(task.task_id)
             task.status = "processing"
             asyncio.create_task(convert_video(task))
+            clear_sse_cache()  # Force SSE update when task starts
             save_queue_state()
 
         await asyncio.sleep(0.1)
-
-# Initialize queue state on module load
-initialize_queue_state()
-
-# Also initialize when the app starts
-@app.on_event("startup")
-async def startup_event():
-    initialize_queue_state()
 
 class FFmpegProgress:
     def __init__(self, total_duration: float):
@@ -934,8 +961,6 @@ async def convert_video(task: ConversionTask):
     if 'delete_original' in config and 'overwrite_original' not in config:
         overwrite_original = config.get('delete_original', True)
     video_settings = config['video_settings']
-    original_extension = os.path.splitext(input_file)[1].lower()
-    new_extension = f".{video_settings['container']}"
 
     try:
         # Use the first file from the scene
@@ -944,6 +969,9 @@ async def convert_video(task: ConversionTask):
 
         scene_file = task.scene.files[0]
         input_file = scene_file.path
+
+        original_extension = os.path.splitext(input_file)[1].lower()
+        new_extension = f".{video_settings['container']}"
 
         # Determine output filename based on overwrite settings and extension match
         if overwrite_original and original_extension == new_extension:
@@ -1271,6 +1299,7 @@ async def update_stash_file(scene_id: str, file_id: str, new_file_path: str, ove
 @app.get("/sse")
 async def sse_endpoint(request: Request):
     async def event_generator():
+        global last_sse_data
         client_id = str(uuid.uuid4())
         sse_clients.add(client_id)
         try:
@@ -1304,7 +1333,14 @@ async def sse_endpoint(request: Request):
                     "paused": queue_paused
                 }
 
-                yield f"data: {json.dumps(status_data)}\n\n"
+                # Only send if data has changed
+                if last_sse_data != status_data:
+                    last_sse_data = status_data
+                    yield f"data: {json.dumps(status_data)}\n\n"
+                else:
+                    # Send a keep-alive ping every 30 seconds
+                    await asyncio.sleep(1)
+                    continue
                 await asyncio.sleep(1)
         finally:
             sse_clients.discard(client_id)
@@ -1317,6 +1353,15 @@ async def sse_endpoint(request: Request):
             "Connection": "keep-alive",
         }
     )
+
+# Runtime queue state (not persisted)
+# Initialize as paused by default
+queue_paused = True
+
+# Function to clear SSE cache when queue changes
+def clear_sse_cache():
+    global last_sse_data
+    last_sse_data = None
 
 def convert_bitrate_to_bps(bitrate_str: str) -> int:
     """Convert bitrate string (e.g., '1000k') to bits per second"""
