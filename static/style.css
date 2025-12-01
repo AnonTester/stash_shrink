@@ -176,10 +176,42 @@ input, select {
 .form-group input[type="checkbox"] {
     width: auto;
     margin-right: 0.5rem;
+    vertical-align: middle;
 }
 
 .form-group label[for]:not(.btn) {
-    display: inline-block;
+    display: inline;
+    vertical-align: middle;
+}
+
+/* Checkbox container for proper alignment */
+.checkbox-container {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0.5rem 0;
+}
+
+.checkbox-container input[type="checkbox"] {
+    margin-top: 0.25rem;
+    flex-shrink: 0;
+}
+
+.checkbox-container label {
+    flex: 1;
+    line-height: 1.4;
+}
+
+
+/* Special handling for checkbox labels to keep them on same line */
+.form-group > input[type="checkbox"] + label {
+    display: inline;
+    margin-left: 0.5rem;
+}
+
+/* Ensure checkbox group stays on one line */
+.form-group.checkbox-group {
+    white-space: nowrap;
 }
 
 .results-controls, .conversion-controls {
@@ -553,22 +585,47 @@ input, select {
 
 .conversion-section .data-table th:nth-child(4),
 .conversion-section .data-table td:nth-child(4) {
-    width: 124px; /* Actions - fixed width */
-    min-width: 124px;
-    max-width: 124px;
-    text-align: right;
+    width: 110px; /* Actions - fixed width */
+    min-width: 110px;
+    max-width: 110px;
+    text-align: center;
 }
 
 /* Conversion table specific styling */
 .conversion-actions {
-    text-align: right !important;
+    vertical-align: middle !important;
+    height: 100%;
+    padding: 0.75rem !important; /* Match other cells */
+}
+
+/* Container for action buttons */
+.action-buttons-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-height: 50px;
+    height: 100%;
+}
+
+/* Ensure buttons have consistent size */
+.action-button {
+    min-width: 80px;
+    width: auto;
+    padding: 0.375rem 0.75rem !important;
+    font-size: 0.75rem;
+    text-align: center;
+    white-space: nowrap;
 }
 
 /* Smaller buttons for actions */
 .btn-sm {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    margin-left: 0.25rem;
+    /* Inherit from .action-button if using that class */
+ }
+
+/* Adjust conversion table row height */
+.conversion-section .data-table tr {
+    height: auto;
+    min-height: 60px;
 }
 
 /* Status cell styling */
@@ -913,11 +970,6 @@ body.first-run header {
 /* Ensure table rows don't have tooltips that cause layout issues */
 .data-table tr {
     position: static;
-}
-
-/* More aggressive text overflow prevention */
-.data-table {
-    word-wrap: break-word;
 }
 
 .data-table td {

@@ -996,7 +996,7 @@ async def convert_video(task: ConversionTask):
 
         logger.info(f"Starting conversion for {input_file}")
         # Build FFmpeg command with progress output
-        ffmpeg_cmd = build_ffmpeg_command(input_file, temp_output, video_settings)
+        ffmpeg_cmd = build_ffmpeg_command(input_file, temp_output, video_settings, scene_file.frame_rate)
 
         # Write to log
         with open(task.log_file, 'a') as log:
@@ -1164,8 +1164,17 @@ async def convert_video(task: ConversionTask):
 
         save_queue_state()  # Save on error
 
-def build_ffmpeg_command(input_file: str, output_file: str, settings: Dict[str, Any]) -> str:
-    framerate_option = f"-r {settings['framerate']}" if settings.get('framerate') else ""
+def build_ffmpeg_command(input_file: str, output_file: str, settings: Dict[str, Any], source_framerate: Optional[float] = None) -> str:
+    framerate_option = ""
+    if settings.get('framerate'):
+        # Only set framerate if source framerate is higher than target
+        # This ensures we never increase the framerate, only reduce it
+        if source_framerate and source_framerate > settings['framerate']:
+            framerate_option = f"-r {settings['framerate']}"
+        else:
+            # Don't set framerate option, let ffmpeg use source framerate
+            framerate_option = ""
+
 
     # Use progress reporting and verbose output for better progress tracking
     cmd = f"""ffmpeg -y -hide_banner -loglevel verbose -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\,min({settings['width']}/iw\,{settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf 28 -c:a aac -b:v {settings['bitrate']} -maxrate {settings['bitrate']} -bufsize {settings['buffer_size']} -f {settings['container']} "{output_file}" """

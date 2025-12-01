@@ -98,10 +98,12 @@
                             <input type="number" id="max_concurrent_tasks" name="max_concurrent_tasks" value="2" min="1" max="10">
                         </div>
                         <div class="form-group">
-                            <input type="checkbox" id="overwrite_original" name="overwrite_original" checked>
-                            <label for="overwrite_original" style="display: inline-block; margin-left: 0.5rem;">
+                            <div class="checkbox-container">
+                                <input type="checkbox" id="overwrite_original" name="overwrite_original" checked>
+                                <label for="overwrite_original">
                                 Overwrite original file (if unchecked, converted files will be added as new files to the scene. If checked, original files will be replaced.)
                             </label>
+                            </div>
                         </div>
                     </div>
 

@@ -1225,6 +1225,7 @@ class StashShrinkApp {
                     </div>
                 </td>
                 <td class="conversion-actions">
+                    <div class="action-buttons-container">
                     ${task.status === 'error' ?
                         `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log">Log</button>
                          <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry">Retry</button>` :
@@ -1235,6 +1236,7 @@ class StashShrinkApp {
                     ${task.status === 'pending' || task.status === 'completed' ?
                         `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove">Remove</button>` :
                         ''}
+                    </div>
                 </td>
             `;
             if (isError) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
@@ -1246,7 +1248,6 @@ class StashShrinkApp {
         const total = queue.length;
         const completed = queue.filter(task => task.status === 'completed' || task.status === 'error').length;
         const remaining = total - completed;
-        const processing = activeTasks ? activeTasks.length : queue.filter(task => task.status === 'processing').length;
         const progress = total > 0 ? (completed / total) * 100 : 0;
 
         document.getElementById('overall-progress').style.width = `${progress}%`;
@@ -1255,20 +1256,21 @@ class StashShrinkApp {
             ${progress.toFixed(1)}% Complete (${completed}/${total} files, ${remaining} remaining)
         `;
 
-        const activeProcessingTasks = queue.filter(task => task.status === 'processing' && task.eta);
-        if (activeProcessingTasks.length > 0) {
-            // Use the maximum ETA among active tasks
-            const maxEta = Math.max(...activeProcessingTasks.map(task => task.eta || 0));
-            const etaElement = document.getElementById('eta-text');
-            etaElement.textContent = `ETA: ${this.formatTime(maxEta)}`;
-            etaElement.style.display = 'block';
-        } else if (processing > 0) {
-            // Processing but no ETA yet
-            const etaElement = document.getElementById('eta-text');
-            etaElement.textContent = 'ETA: Calculating...';
-            etaElement.style.display = 'block';
+        const hasProcessingTasks = queue.some(task => task.status === 'processing');
+        if (hasProcessingTasks) {
+            const activeProcessingTasks = queue.filter(task => task.status === 'processing' && task.eta);
+            if (activeProcessingTasks.length > 0) {
+                // Use the maximum ETA among active tasks
+                const maxEta = Math.max(...activeProcessingTasks.map(task => task.eta || 0));
+                const etaElement = document.getElementById('eta-text');
+                etaElement.textContent = `ETA: ${this.formatTime(maxEta)}`;
+                etaElement.style.display = 'block';
+            } else {
+                const etaElement = document.getElementById('eta-text');
+                etaElement.textContent = 'ETA: Calculating...';
+                etaElement.style.display = 'block';
+            }
         } else {
-            // No active processing tasks
             document.getElementById('eta-text').style.display = 'none';
         }
     }
