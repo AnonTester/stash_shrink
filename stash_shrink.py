@@ -547,15 +547,23 @@ async def search_scenes(search_params: SearchParams):
 
                         # Check path filter
                         path_matches = True
-                        if search_params.path and search_params.path not in file.path:
-                            path_matches = False
-                            logger.debug(f"File {file.basename} doesn't match path filter: {file.path}")
+                        if search_params.path:
+                            search_path_lower = search_params.path.lower()
+                            file_path_lower = file.path.lower()
+                            if search_path_lower not in file_path_lower:
+                                path_matches = False
+                                logger.debug(f"File {file.basename} doesn't match path filter: {file.path} (searching for: {search_params.path})")
 
-                        # Include file if it exceeds any limits OR has wrong codec, AND matches path filter
-                        if (exceeds_limits or wrong_codec) and path_matches:
-                            include_file = True
+                        # Check if we have any technical filters (non-path)
+                        has_technical_filters = any([
+                            search_params.max_width is not None,
+                            search_params.max_height is not None,
+                            search_params.max_bitrate is not None,
+                            search_params.max_framerate is not None,
+                            search_params.codec is not None
+                        ])
 
-                        # If no filters are specified, include all files
+                        # Determine whether to include the file
                         if not any([
                             search_params.max_width is not None,
                             search_params.max_height is not None,
@@ -564,7 +572,16 @@ async def search_scenes(search_params: SearchParams):
                             search_params.codec is not None,
                             search_params.path is not None
                         ]):
+                            # No filters at all - include everything
                             include_file = True
+                        elif has_technical_filters:
+                            # Has technical filters - only include if exceeds limits/wrong codec AND matches path
+                            if (exceeds_limits or wrong_codec) and path_matches:
+                                include_file = True
+                        else:
+                            # Only path filter (or no technical filters) - include if matches path
+                            if path_matches:
+                                include_file = True
 
                         if include_file:
                             filtered_files.append(file)
@@ -574,6 +591,7 @@ async def search_scenes(search_params: SearchParams):
                         scene_data['files'] = filtered_files
                         scene = Scene(**scene_data)
                         scenes.append(scene)
+
 
             except Exception as e:
                 logger.error(f"Failed to process scene data: {scene_data}, error: {e}")
