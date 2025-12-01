@@ -392,9 +392,9 @@ class StashShrinkApp {
         const pathMappings = this.config.path_mappings || [];
         form.path_mappings.value = pathMappings.join('\n');
 
-        // Populate delete original setting
-        const deleteOriginal = this.config.delete_original !== false; // default to true
-        form.delete_original.checked = deleteOriginal;
+        // Populate overwrite original setting
+        const overwriteOriginal = this.config.overwrite_original !== false; // default to true
+        form.overwrite_original.checked = overwriteOriginal;
 
         const videoSettings = this.config.video_settings || {};
         form.width.value = videoSettings.width || '';

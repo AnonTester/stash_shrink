@@ -131,7 +131,15 @@ class ConversionTask(BaseModel):
 def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
+            config = json.load(f)
+            # Migrate from delete_original to overwrite_original if needed
+            if 'delete_original' in config and 'overwrite_original' not in config:
+                config['overwrite_original'] = config['delete_original']
+                # Remove old setting
+                del config['delete_original']
+                # Save migrated config
+                save_config(config)
+            return config
     return None
 
 def save_config(config):
@@ -732,7 +740,10 @@ async def cancel_all_conversions():
     return {"status": "cancelled", "count": cancelled_count}
 
 # Runtime queue state (not persisted)
-queue_paused = True
+# Initialize as paused by default
+def initialize_queue_state():
+    global queue_paused
+    queue_paused = True
 
 @app.post("/api/toggle-pause")
 async def toggle_pause():
@@ -744,6 +755,7 @@ async def toggle_pause():
 async def start_processing():
     """Start processing the queue if not paused"""
     global queue_paused
+    config = get_config()
     if not queue_paused and conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
         asyncio.create_task(process_conversion_queue())
     return {"status": "processing_started"}
@@ -823,6 +835,14 @@ async def process_conversion_queue():
             save_queue_state()
 
         await asyncio.sleep(0.1)
+
+# Initialize queue state on module load
+initialize_queue_state()
+
+# Also initialize when the app starts
+@app.on_event("startup")
+async def startup_event():
+    initialize_queue_state()
 
 class FFmpegProgress:
     def __init__(self, total_duration: float):
@@ -909,7 +929,10 @@ class FFmpegProgress:
 
 async def convert_video(task: ConversionTask):
     config = get_config()
+    # Handle migration from delete_original to overwrite_original
     overwrite_original = config.get('overwrite_original', True)
+    if 'delete_original' in config and 'overwrite_original' not in config:
+        overwrite_original = config.get('delete_original', True)
     video_settings = config['video_settings']
     original_extension = os.path.splitext(input_file)[1].lower()
     new_extension = f".{video_settings['container']}"
@@ -1274,11 +1297,11 @@ async def sse_endpoint(request: Request):
                     serializable_queue.append(task_data)
 
                 current_config = get_config()
-                # Queue pause state is now runtime-only, default to True (paused)
+                global queue_paused
                 status_data = {
                     "queue": serializable_queue,
                     "active": list(active_tasks),
-                    "paused": True  # Default to paused on app start
+                    "paused": queue_paused
                 }
 
                 yield f"data: {json.dumps(status_data)}\n\n"
