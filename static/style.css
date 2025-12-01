@@ -175,6 +175,11 @@ input, select {
 /* Inline checkbox labels */
 .form-group input[type="checkbox"] {
     width: auto;
+    margin-right: 0.5rem;
+}
+
+.form-group label[for]:not(.btn) {
+    display: inline-block;
 }
 
 .results-controls, .conversion-controls {
@@ -838,11 +843,6 @@ body.first-run header {
 }
 
 @media (max-width: 768px) {
-    .form-row {
-        flex-direction: column;
-        gap: 0;
-    }
-
     .search-form .form-row {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -899,10 +899,6 @@ body.first-run header {
     .modal-content {
         width: 95%;
         margin: 10% auto;
-    }
-
-    .search-form .form-row {
-        grid-template-columns: 1fr 1fr;
     }
 }
 

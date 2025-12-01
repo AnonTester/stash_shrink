@@ -634,6 +634,11 @@ class StashShrinkApp {
             if (isQueued) row.style.opacity = '0.7';
 
             tbody.appendChild(row);
+
+            // Update tooltip for queued scenes
+            if (isQueued) {
+                row.querySelector('.scene-checkbox').title = "Already in conversion queue";
+            }
         });
 
         this.syncPaginationControls();

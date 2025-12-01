@@ -37,6 +37,7 @@ LOGS_DIR = "logs"
 DEFAULT_CONFIG = {
     "stash_url": "http://localhost:9999",
     "api_key": "",
+    "overwrite_original": True,  # Default to overwrite behavior
     "default_search_limit": 50,
     "max_concurrent_tasks": 2,
     "delete_original": True,
@@ -70,6 +71,7 @@ class Settings(BaseModel):
     max_concurrent_tasks: int
     delete_original: bool
     paused: bool = False
+    overwrite_original: bool = True  # New setting for overwrite behavior
     video_settings: Dict[str, Any]
     path_mappings: List[str]
 
@@ -910,7 +912,10 @@ class FFmpegProgress:
 async def convert_video(task: ConversionTask):
     config = get_config()
     delete_original = config.get('delete_original', True)
+    overwrite_original = config.get('overwrite_original', True)
     video_settings = config['video_settings']
+    original_extension = os.path.splitext(input_file)[1].lower()
+    new_extension = f".{video_settings['container']}"
 
     try:
         # Use the first file from the scene
@@ -919,9 +924,23 @@ async def convert_video(task: ConversionTask):
 
         scene_file = task.scene.files[0]
         input_file = scene_file.path
-        base_name = os.path.splitext(input_file)[0]
-        temp_output = f"{base_name}.converting.{video_settings['container']}"
-        final_output = await find_available_filename(base_name, video_settings['container'])
+
+        # Determine output filename based on overwrite settings and extension match
+        if overwrite_original and original_extension == new_extension:
+            # Same extension - overwrite the original file
+            base_name = os.path.splitext(input_file)[0]
+            final_output = input_file  # Will overwrite original
+            temp_output = f"{base_name}.converting.{video_settings['container']}"
+        elif not overwrite_original:
+            # Don't overwrite - find available name
+            base_name = os.path.splitext(input_file)[0]
+            final_output = await find_available_filename(base_name, video_settings['container'])
+            temp_output = f"{final_output}.converting"
+        else:
+            # Different extensions with overwrite enabled
+            base_name = os.path.splitext(input_file)[0]
+            final_output = await find_available_filename(base_name, video_settings['container'])
+            temp_output = f"{final_output}.converting"
 
         # Get file duration for progress calculation
         file_duration = scene_file.duration or 0
@@ -1022,21 +1041,56 @@ async def convert_video(task: ConversionTask):
             if output_size == 0:
                 raise Exception("Output file is empty")
 
-            # Rename temporary file to final name
-            os.rename(temp_output, final_output)
+            # Handle different scenarios based on overwrite settings and extension match
+            if overwrite_original and original_extension == new_extension:
+                # Same extension - replace original file directly
+                if os.path.exists(final_output):  # This is the original file
+                    os.remove(final_output)  # Delete original
+                os.rename(temp_output, final_output)
 
-            # Update Stash with the new file
-            await update_stash_file(task.scene.id, scene_file.id, final_output)
+                # Only trigger scan, no Stash DB update needed since path is the same
+                await trigger_stash_scan(final_output)
+
+            elif overwrite_original and original_extension != new_extension:
+                # Different extensions with overwrite enabled
+                os.rename(temp_output, final_output)
+
+                # Update Stash and only delete original after successful update
+                try:
+                    await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original)
+
+                    # Delete original only after successful Stash update
+                    if delete_original and os.path.exists(input_file):
+                        os.remove(input_file)
+                        logger.info(f"Deleted original file: {input_file}")
+
+                except Exception as stash_error:
+                    # If Stash update fails, mark task for retry (Stash update only)
+                    task.status = "error"
+                    task.error = f"Stash update failed: {str(stash_error)}"
+                    logger.error(f"Stash update failed for {final_output}: {stash_error}")
+                    save_queue_state()
+                    return
+
+            else:
+                # No overwrite - add as new file to scene
+                os.rename(temp_output, final_output)
+
+                # Add as new file to Stash scene
+                await add_file_to_scene(task.scene.id, final_output, overwrite_original)
 
             # Delete original file if configured
-            original_file_exists = os.path.exists(input_file)
-            if delete_original and original_file_exists:
-                os.remove(input_file)
-                logger.info(f"Deleted original file: {input_file}")
-            elif delete_original and not original_file_exists:
-                logger.warning(f"Original file not found for deletion: {input_file}")
+            # Only delete if overwrite is enabled and we haven't already deleted it
+            if delete_original and overwrite_original and original_extension == new_extension:
+                # Already deleted above in the same extension case
+                pass
             else:
-                logger.info(f"Original file preserved: {input_file}")
+                original_file_exists = os.path.exists(input_file)
+                if delete_original and original_file_exists and overwrite_original:
+                    os.remove(input_file)
+                    logger.info(f"Deleted original file: {input_file}")
+                elif not overwrite_original:
+                    logger.info(f"Original file preserved (no overwrite): {input_file}")
 
             task.status = "completed"
             task.output_file = final_output
@@ -1054,6 +1108,7 @@ async def convert_video(task: ConversionTask):
         task.error = str(e)
         logger.error(f"Conversion failed for {task.scene.files[0].path if task.scene.files else 'unknown'}: {e}")
         logger.info(f"Delete original setting: {delete_original}")
+        logger.info(f"Overwrite original setting: {overwrite_original}")
 
         # Clean up temporary file if it exists
         if 'temp_output' in locals() and os.path.exists(temp_output):
@@ -1087,13 +1142,74 @@ async def find_available_filename(base_name: str, container: str) -> str:
             return candidate
         counter += 1
 
-async def update_stash_file(scene_id: str, file_id: str, new_file_path: str):
+async def trigger_stash_scan(file_path: str):
+    """Trigger Stash metadata scan for a file without updating database"""
+    config = get_config()
+    path_mappings = config.get('path_mappings', [])
+
+    # Convert the host path back to Docker path for Stash
+    docker_path = apply_path_mappings(file_path, path_mappings)
+
+    scan_mutation = """
+    mutation ScanFile($path: String!) {
+      metadataScan(input: { paths: [$path] })
+    }
+    """
+    try:
+        await stash_request(scan_mutation, {"path": docker_path})
+        logger.info(f"Triggered metadata scan for: {docker_path}")
+    except Exception as e:
+        logger.warning(f"Metadata scan failed (non-critical): {e}")
+        raise Exception(f"Stash scan failed: {str(e)}")
+
+async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_original: bool):
+    """Add a new file to a scene in Stash (for non-overwrite mode)"""
+    config = get_config()
+    path_mappings = config.get('path_mappings', [])
+
+    # Convert the host path back to Docker path for Stash
+    docker_path = apply_path_mappings(new_file_path, path_mappings)
+    new_basename = os.path.basename(docker_path)
+
+    # First, ensure the file is scanned into Stash
+    await trigger_stash_scan(new_file_path)
+
+    # Then use sceneAssignFile to add it to the scene
+    assign_mutation = """
+    mutation SceneAssignFile($scene_id: ID!, $file_id: ID!) {
+      sceneAssignFile(input: { scene_id: $scene_id, file_id: $file_id })
+    }
+    """
+
+    # We need to get the file ID after scanning
+    find_file_query = """
+    query FindFileByPath($path: String!) {
+      findFiles(path: $path) {
+        files {
+          id
+        }
+      }
+    }
+    """
+
+    try:
+        file_result = await stash_request(find_file_query, {"path": docker_path})
+        if file_result['data']['findFiles']['files']:
+            file_id = file_result['data']['findFiles']['files'][0]['id']
+            await stash_request(assign_mutation, {"scene_id": scene_id, "file_id": file_id})
+            logger.info(f"Added file {new_basename} to scene {scene_id}")
+    except Exception as e:
+        logger.error(f"Failed to add file to scene: {e}")
+        raise Exception(f"Failed to add file to scene: {str(e)}")
+
+async def update_stash_file(scene_id: str, file_id: str, new_file_path: str, overwrite_original: bool):
     """Update Stash with the new file information"""
     config = get_config()
     path_mappings = config.get('path_mappings', [])
 
     # Convert the host path back to Docker path for Stash
     docker_path = apply_path_mappings(new_file_path, path_mappings)
+
     # Ensure the log file is created and writable
     #log_dir = os.path.dirname(task.log_file)
     #os.makedirs(log_dir, exist_ok=True)
@@ -1122,18 +1238,19 @@ async def update_stash_file(scene_id: str, file_id: str, new_file_path: str):
         logger.error(f"Failed to update Stash file via execSQL: {e}")
         raise Exception(f"Stash database update failed: {str(e)}")
 
-    # Trigger metadata scan to update file properties
-    scan_mutation = """
-    mutation ScanFile($path: String!) {
-      metadataScan(input: { paths: [$path] })
-    }
-    """
-    try:
-        await stash_request(scan_mutation, {"path": docker_path})
-        logger.info(f"Triggered metadata scan for: {docker_path}")
-    except Exception as e:
-        logger.warning(f"Metadata scan failed (non-critical): {e}")
-        # Don't fail the entire process if scan fails, as the DB update was successful
+    # Trigger metadata scan to update file properties (only for overwrite mode)
+    if overwrite_original:
+        scan_mutation = """
+        mutation ScanFile($path: String!) {
+          metadataScan(input: { paths: [$path] })
+        }
+        """
+        try:
+            await stash_request(scan_mutation, {"path": docker_path})
+            logger.info(f"Triggered metadata scan for: {docker_path}")
+        except Exception as e:
+            logger.warning(f"Metadata scan failed (non-critical): {e}")
+            # Don't fail the entire process if scan fails, as the DB update was successful
 
 @app.get("/sse")
 async def sse_endpoint(request: Request):

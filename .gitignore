@@ -4,6 +4,7 @@ logs/*
 config.json
 conversion_queue.json
 *.swp
+.idea
 
 .DS_Store
 **/__pycache__/
