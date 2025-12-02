@@ -566,6 +566,8 @@ class StashShrinkApp {
             const response = await fetch(`/api/retry-conversion/${taskId}`, { method: 'POST' });
             if (response.ok) {
                 this.showToast('Conversion retried', 'success');
+                // Force immediate status update
+                await this.fetchAndUpdateConversionStatus();
             } else {
                 throw new Error('Failed to retry conversion');
             }
@@ -944,20 +946,15 @@ class StashShrinkApp {
                 this.updatePauseButton();
                 this.showToast(`Queue ${this.isQueuePaused ? 'paused' : 'started'}`, 'info');
 
-                // Force immediate SSE update
+                // Force immediate SSE update when unpausing
                 if (!this.isQueuePaused) {
-                    // Force start processing when starting
-                    console.log('Queue started, starting processing...')
-                    // Manually trigger processing and update UI
-                    setTimeout(() => {
-                        this.startQueueProcessing();
-                        // Force a manual fetch to update UI immediately
-                        this.fetchAndUpdateConversionStatus();
-                    }, 100);
+                    console.log('Queue started, forcing immediate update');
+                    // Force a manual fetch and start processing
+                    await this.fetchAndUpdateConversionStatus();
+                    this.startQueueProcessing();
                 }
-
-               // Also fetch updated status immediately
-                console.log(`Queue ${this.isQueuePaused ? 'paused' : 'resumed and processing started'}`);
+            } else {
+                throw new Error('Failed to toggle pause');
             }
         } catch (error) {
             console.error('Failed to toggle pause:', error);
@@ -973,12 +970,19 @@ class StashShrinkApp {
         }
     }
 
-    startQueueProcessing() {
-        // Call the API to start processing
-        fetch('/api/start-processing', { method: 'POST' }).catch(error => {
+    async startQueueProcessing() {
+        try {
+            const response = await fetch('/api/start-processing', { method: 'POST' });
+            if (!response.ok) {
+                throw new Error('Failed to start queue processing');
+            }
+            console.log('Queue processing started');
+
+            // Force immediate status check
+            await this.fetchAndUpdateConversionStatus();
+        } catch (error) {
             console.error('Failed to start queue processing:', error);
-        });
-        console.log('Queue processing paused, not starting new tasks');
+        }
     }
 
     showConversionSection() {
@@ -1047,9 +1051,29 @@ class StashShrinkApp {
         this.pauseSSE();
     }
 
+    async checkSSEConnection() {
+        try {
+            const response = await fetch('/api/debug/sse-status');
+            const status = await response.json();
+            console.log('SSE Debug Status:', status);
+
+            // Log current task statuses
+            if (this.lastConversionStatus) {
+                console.log('Last conversion status:', this.lastConversionStatus);
+            }
+        } catch (error) {
+            console.error('Failed to check SSE status:', error);
+        }
+    }
+
+    // Add a periodic check (optional, for debugging)
+    // setInterval(() => this.checkSSEConnection(), 10000); // Every 10 seconds
+
+    // Update the startSSE method to add more logging
     async startSSE() {
         // Close existing connection if any
         if (this.eventSource) {
+            console.log('Closing existing SSE connection');
             this.eventSource.close();
             this.eventSource = null;
         }
@@ -1066,10 +1090,13 @@ class StashShrinkApp {
         await this.ensureInitialConversionStatus();
 
         this.eventSource = new EventSource('/sse');
+        console.log('EventSource created, readyState:', this.eventSource.readyState);
 
         let lastDataHash = null;
+        let messageCount = 0;
 
         this.eventSource.onmessage = (event) => {
+            messageCount++;
             const data = JSON.parse(event.data);
 
             // Create a simple hash to detect actual changes
@@ -1078,17 +1105,34 @@ class StashShrinkApp {
             // Only update if data has actually changed
             if (dataHash !== lastDataHash) {
                 lastDataHash = dataHash;
+                console.log(`SSE message #${messageCount}: Data changed, updating UI`);
+                console.log('SSE Data received:', {
+                    queue_length: data.queue.length,
+                    active_tasks: data.active.length,
+                    paused: data.paused,
+                    tasks: data.queue.map(t => ({
+                        id: t.task_id,
+                        status: t.status,
+                        progress: t.progress
+                    }))
+                });
                 this.updateConversionStatus(data);
+            } else {
+                console.log(`SSE message #${messageCount}: No change detected`);
             }
         };
 
+        this.eventSource.onopen = () => {
+            console.log('SSE connection opened');
+        };
+
         this.eventSource.onerror = (error) => {
-            // Don't log normal page unload errors
+            console.error('SSE error:', error, 'readyState:', this.eventSource.readyState);
+
             if (this.eventSource.readyState === EventSource.CLOSED) {
                 console.log('SSE connection closed normally');
             } else {
-                console.error('SSE error:', error);
-                // Attempt to reconnect after 5 seconds
+                console.error('SSE error, attempting to reconnect in 5 seconds');
                 if (!document.hidden) {
                     setTimeout(() => this.startSSE(), 5000);
                 }
