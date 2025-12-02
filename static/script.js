@@ -943,12 +943,20 @@ class StashShrinkApp {
                 this.isQueuePaused = result.paused;
                 this.updatePauseButton();
                 this.showToast(`Queue ${this.isQueuePaused ? 'paused' : 'started'}`, 'info');
+
+                // Force immediate SSE update
                 if (!this.isQueuePaused) {
                     // Force start processing when starting
                     console.log('Queue started, starting processing...')
-                    await this.startQueueProcessing();
-                    this.showToast('Queue processing started', 'success');
+                    // Manually trigger processing and update UI
+                    setTimeout(() => {
+                        this.startQueueProcessing();
+                        // Force a manual fetch to update UI immediately
+                        this.fetchAndUpdateConversionStatus();
+                    }, 100);
                 }
+
+               // Also fetch updated status immediately
                 console.log(`Queue ${this.isQueuePaused ? 'paused' : 'resumed and processing started'}`);
             }
         } catch (error) {
@@ -966,15 +974,11 @@ class StashShrinkApp {
     }
 
     startQueueProcessing() {
-        // Only start processing if queue is not paused
-        if (!this.isQueuePaused) {
-            fetch('/api/start-processing', { method: 'POST' })
-                .catch(error => {
-                    console.error('Failed to start queue processing:', error);
-                });
-        } else {
-            console.log('Queue processing paused, not starting new tasks');
-        }
+        // Call the API to start processing
+        fetch('/api/start-processing', { method: 'POST' }).catch(error => {
+            console.error('Failed to start queue processing:', error);
+        });
+        console.log('Queue processing paused, not starting new tasks');
     }
 
     showConversionSection() {
@@ -1171,7 +1175,7 @@ class StashShrinkApp {
             this.showConversionBtn.style.display = 'inline-block';
         }
 
-        // Hide conversion controls and progress overview when there are no tasks
+        // Hide conversion controls and progress overview when there are no active/pending tasks
         if (this.conversionControls) {
             this.conversionControls.style.display = hasAnyTasks ? 'flex' : 'none';
         }
@@ -1202,6 +1206,7 @@ class StashShrinkApp {
             const row = document.createElement('tr');
             const sceneTitle = task.scene.title || 'Untitled';
             const isError = task.status === 'error';
+            const isCancelled = task.status === 'cancelled';
             const fileName = task.scene.files && task.scene.files.length > 0 ?
                 task.scene.files[0].basename : 'Unknown file';
 
@@ -1226,7 +1231,7 @@ class StashShrinkApp {
                 </td>
                 <td class="conversion-actions">
                     <div class="action-buttons-container">
-                    ${task.status === 'error' ?
+                    ${task.status === 'error' || task.status === 'cancelled' ?
                         `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log">Log</button>
                          <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry">Retry</button>` :
                         ''}
@@ -1239,7 +1244,8 @@ class StashShrinkApp {
                     </div>
                 </td>
             `;
-            if (isError) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
+            if (isError || isCancelled) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
+            if (isCancelled) row.style.opacity = '0.7';
             tbody.appendChild(row);
         });
     }
@@ -1249,6 +1255,7 @@ class StashShrinkApp {
         const completed = queue.filter(task => task.status === 'completed' || task.status === 'error').length;
         const remaining = total - completed;
         const progress = total > 0 ? (completed / total) * 100 : 0;
+        const hasActiveOrPending = queue.some(task => task.status === 'processing' || task.status === 'pending');
 
         document.getElementById('overall-progress').style.width = `${progress}%`;
         document.getElementById('progress-text').innerHTML = `

@@ -725,21 +725,32 @@ async def conversion_status():
 async def cancel_conversion(task_id: str):
     for i, task in enumerate(conversion_queue):
         if task.task_id == task_id:
-            # Mark task as cancelled
-            task.status = "cancelled"
-            task.error = "Conversion cancelled by user"
+            # If task is currently processing, we need to terminate the FFmpeg process
+            if task.status == "processing":
+                # Mark task as cancelled but keep in queue
+                task.status = "cancelled"
+                task.error = "Conversion cancelled by user"
 
-            # Remove from active tasks
-            if task_id in active_tasks:
-                active_tasks.remove(task_id)
+                # Remove from active tasks
+                if task_id in active_tasks:
+                    active_tasks.remove(task_id)
 
-            # Clean up temporary files if they exist
-            if task.output_file and os.path.exists(task.output_file):
-                try:
-                    os.remove(task.output_file)
-                    logger.info(f"Cleaned up output file for cancelled task: {task.output_file}")
-                except Exception as e:
-                    logger.error(f"Failed to clean up output file {task.output_file}: {e}")
+                # We can't easily kill the FFmpeg subprocess here since it's running in a separate task
+                # The convert_video task will handle cancellation when it checks task.status
+                logger.info(f"Marked processing task {task_id} as cancelled for scene: {task.scene.title}")
+            elif task.status == "pending":
+                # For pending tasks, just mark as cancelled
+                task.status = "cancelled"
+                task.error = "Conversion cancelled by user"
+                logger.info(f"Marked pending task {task_id} as cancelled for scene: {task.scene.title}")
+            elif task.status == "cancelled":
+                # Already cancelled, nothing to do
+                logger.info(f"Task {task_id} is already cancelled")
+                return {"status": "already_cancelled"}
+            else:
+                # For other statuses (completed, error), we don't change anything
+                logger.info(f"Task {task_id} has status {task.status}, not cancelling")
+                return {"status": "not_cancellable"}
 
             # Write cancellation to log
             try:
@@ -748,20 +759,15 @@ async def cancel_conversion(task_id: str):
             except Exception as e:
                 logger.error(f"Failed to write cancellation to log: {e}")
 
-            logger.info(f"Cancelled conversion task {task_id} for scene: {task.scene.title}")
-
-            # Remove from queue
-            conversion_queue.pop(i)
-            task_status.pop(task_id, None)
+            save_queue_state()  # Save after cancellation
             break
 
-    save_queue_state()  # Save after cancellation
     return {"status": "cancelled"}
 
 @app.post("/api/clear-completed")
 async def clear_completed():
     global conversion_queue
-    tasks_to_keep = [task for task in conversion_queue if task.status in ["pending", "processing"]]
+    tasks_to_keep = [task for task in conversion_queue if task.status in ["pending", "processing", "cancelled"]]
     tasks_removed = len(conversion_queue) - len(tasks_to_keep)
     conversion_queue = tasks_to_keep
     save_queue_state()
@@ -783,8 +789,6 @@ async def cancel_all_conversions():
         except Exception as e:
             logger.error(f"Failed to cancel task {task_id}: {e}")
 
-    # Clear the queue and save state
-    conversion_queue = []
     save_queue_state()
 
     return {"status": "cancelled", "count": cancelled_count}
@@ -800,15 +804,19 @@ async def toggle_pause():
     global queue_paused
     queue_paused = not queue_paused
     clear_sse_cache()  # Force SSE update when pause state changes
+
+    # If we're unpausing and there are pending tasks, start processing
+    if not queue_paused and conversion_queue:
+        # Find any pending tasks (not just first)
+        pending_tasks = [task for task in conversion_queue if task.status == "pending"]
+        if pending_tasks:
+            asyncio.create_task(process_conversion_queue())
+
     return {"status": "ok", "paused": queue_paused}
 
 @app.post("/api/start-processing")
 async def start_processing():
     """Start processing the queue if not paused"""
-    global queue_paused
-    config = get_config()
-    if not queue_paused and conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
-        asyncio.create_task(process_conversion_queue())
     clear_sse_cache()  # Force SSE update
     return {"status": "processing_started"}
 
@@ -858,6 +866,10 @@ async def retry_conversion(task_id: str):
 
         task = conversion_queue[task_index]
 
+        # Allow retrying cancelled tasks as well
+        if task.status not in ["error", "cancelled"]:
+            raise HTTPException(status_code=400, detail=f"Cannot retry task with status: {task.status}")
+
         # Reset task status to pending for retry
         task.status = "pending"
         task.progress = 0.0
@@ -866,6 +878,11 @@ async def retry_conversion(task_id: str):
 
         save_queue_state()
         logger.info(f"Retrying conversion task {task_id} for scene: {task.scene.title}")
+
+        # Start processing if queue is not paused
+        if not queue_paused:
+            asyncio.create_task(process_conversion_queue())
+
         return {"status": "retried"}
     except Exception as e:
         logger.error(f"Failed to retry conversion task {task_id}: {e}")
@@ -875,17 +892,30 @@ async def process_conversion_queue():
     config = get_config()
 
     global queue_paused
-    if queue_paused:
+
+    # Check if queue is paused or empty
+    if queue_paused or not conversion_queue:
         return
 
-    while conversion_queue and len(active_tasks) < config['max_concurrent_tasks']:
-        task = conversion_queue[0]
-        if task.status == "pending":
-            active_tasks.add(task.task_id)
-            task.status = "processing"
-            asyncio.create_task(convert_video(task))
-            clear_sse_cache()  # Force SSE update when task starts
-            save_queue_state()
+    # Clear SSE cache to force immediate update
+    clear_sse_cache()
+
+    # Find all pending or cancelled tasks (cancelled tasks can be retried)
+    pending_tasks = [task for task in conversion_queue if task.status in ["pending", "cancelled"]]
+    if not pending_tasks:
+        return
+
+    # Start as many pending tasks as allowed by max_concurrent_tasks
+    available_slots = config['max_concurrent_tasks'] - len(active_tasks)
+    tasks_to_start = min(available_slots, len(pending_tasks))
+
+    logger.info(f"Starting {tasks_to_start} pending tasks, available slots: {available_slots}")
+
+    for i in range(tasks_to_start):
+        task = pending_tasks[i]
+        active_tasks.add(task.task_id)
+        task.status = "processing"
+        asyncio.create_task(convert_video(task))
 
         await asyncio.sleep(0.1)
 

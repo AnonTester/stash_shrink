@@ -746,6 +746,64 @@ input, select {
     overscroll-behavior: none;
 }
 
+.modal.first-run {
+    background-color: rgba(0, 0, 0, 0.8);
+}
+
+.modal.first-run .modal-content {
+    max-width: 700px;
+    width: 90%;
+}
+
+.first-run-note {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background-color: #fef3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 0.375rem;
+    color: #856404;
+    text-align: center;
+}
+
+/* Log modal specific styles */
+#log-modal .modal-content {
+    width: 95vw;
+    height: 95vh;
+    max-width: 95vw;
+    max-height: 95vh;
+    margin: 2.5vh auto;
+    display: flex;
+    flex-direction: column;
+}
+
+#log-modal .modal-body {
+    flex: 1;
+    overflow: hidden;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+#log-content {
+    flex: 1;
+    overflow-y: auto;
+    margin: 0;
+    padding: 1rem;
+    font-family: 'Courier New', monospace;
+    font-size: 0.875rem;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background-color: var(--header-bg);
+}
+
+.modal-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
 .modal-content {
     background-color: var(--bg-color);
     margin: 2.5% auto;
@@ -760,20 +818,6 @@ input, select {
     flex-direction: column;
 }
 
-.modal-header {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.modal-body {
-    padding: 1.5rem;
-    overflow-y: auto;
-    flex: 1;
-}
-
 .close {
     color: var(--secondary-color);
     float: right;
@@ -784,25 +828,6 @@ input, select {
 
 .close:hover {
     color: var(--text-color);
-}
-
-/* First run modal styles */
-.modal.first-run {
-    background-color: rgba(0, 0, 0, 0.8);
-}
-
-.modal.first-run .modal-content {
-    max-width: 700px;
-}
-
-.first-run-note {
-    margin-top: 1rem;
-    padding: 0.75rem;
-    background-color: #fef3cd;
-    border: 1px solid #ffeaa7;
-    border-radius: 0.375rem;
-    color: #856404;
-    text-align: center;
 }
 
 .modal.first-run .close {
@@ -825,18 +850,6 @@ body.first-run header {
 .status-processing { color: var(--primary-color); }
 .status-completed { color: var(--success-color); }
 .status-error { color: var(--danger-color); }
-
-/* Log modal content */
-#log-content {
-    background-color: var(--header-bg);
-    padding: 1rem;
-    border-radius: 0.375rem;
-    max-height: 400px;
-    overflow-y: auto;
-    font-family: 'Courier New', monospace;
-    font-size: 0.875rem;
-    white-space: pre-wrap;
-}
 
 /* Section visibility control */
 .search-section {
