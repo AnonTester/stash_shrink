@@ -893,16 +893,6 @@ body.first-run header {
 }
 
 @media (max-width: 768px) {
-    .search-form .form-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 1rem;
-    }
-
-    .search-form .form-row .form-group {
-        margin-bottom: 0;
-    }
-
     .results-controls,
     .conversion-controls,
     .pagination-controls {
@@ -913,6 +903,31 @@ body.first-run header {
 
     .selection-controls {
         justify-content: center;
+    }
+
+    /* Search results table: hide duration, file size, and path columns on narrow screens */
+    .results-section .data-table th:nth-child(3),
+    .results-section .data-table td:nth-child(3), /* Duration */
+    .results-section .data-table th:nth-child(4),
+    .results-section .data-table td:nth-child(4), /* File Size */
+    .results-section .data-table th:nth-child(10),
+    .results-section .data-table td:nth-child(10) { /* Path */
+        display: none;
+    }
+
+    /* Adjust remaining column widths for search results table */
+    .results-section .data-table th:nth-child(2),
+    .results-section .data-table td:nth-child(2) {
+        width: 40%; /* Title column - more space */
+        min-width: 120px;
+    }
+
+    /* Keep checkbox column narrow */
+    .results-section .data-table th:first-child,
+    .results-section .data-table td:first-child {
+        width: 30px;
+        min-width: 30px;
+        max-width: 30px;
     }
 
     .table-container {
@@ -944,6 +959,17 @@ body.first-run header {
     #page-size-bottom {
         width: 120px;
         min-width: 120px;
+    }
+
+    /* Search form adjustments */
+    .search-form .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    .search-form .form-row .form-group {
+        margin-bottom: 0;
     }
 
     .modal-content {
