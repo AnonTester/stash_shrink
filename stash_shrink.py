@@ -1511,64 +1511,32 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
     # Wait a bit for scan to complete
     await asyncio.sleep(2)
 
-    # Try a different approach: use the sceneAssignFile mutation directly
-    # First we need to find the file ID
-    find_file_query = """
-    query FindFileByPath($path: String!) {
-      findFiles(path: $path) {
-        files {
+    # Try to find the scene id of the new file path
+    find_scene_of_file_query = """
+    query FindSceneByPath($scene_filter: SceneFilterType!){
+      findScenes(scene_filter: $scene_filter){    
+        scenes{
           id
         }
       }
-    }
     """
 
-    file_id = None
+    scene_of_file_id = None
     max_attempts = 3
 
     for attempt in range(max_attempts):
         try:
-            file_result = await stash_request_with_retry(find_file_query, {"path": docker_path})
-            if file_result['data']['findFiles']['files']:
-                file_id = file_result['data']['findFiles']['files'][0]['id']
-                logger.info(f"[Add File] Found file in Stash with ID: {file_id}")
+            scene_of_file_result = await stash_request_with_retry(find_scene_of_file_query, {"scene_filter": {"path": {"value": docker_path, "modifier": "EQUALS"}}})
+            if scene_of_file_result['data']['findScenes']['scenes']:
+                scene_of_file_id = scene_of_file_result['data']['findScenes']['scenes'][0]['id']
+                logger.info(f"[Add File] Found scene of file in Stash with ID: {scene_of_file_id}")
                 break
             else:
                 if attempt < max_attempts - 1:
-                    logger.info(f"[Add File] File not found, waiting 3 seconds (attempt {attempt + 1}/{max_attempts})...")
+                    logger.info(f"[Add File] Scene of File not found, waiting 3 seconds (attempt {attempt + 1}/{max_attempts})...")
                     await asyncio.sleep(3)
                 else:
-                    # Try alternative: search by filename in the directory
-                    dir_path = os.path.dirname(docker_path)
-                    filename = os.path.basename(docker_path)
-
-                    search_files_query = """
-                    query SearchFiles($filter: FindFilterType, $file_filter: FileFilterType) {
-                      findFiles(filter: $filter, file_filter: $file_filter) {
-                        files {
-                          id
-                          path
-                          basename
-                        }
-                      }
-                    }
-                    """
-
-                    search_result = await stash_request(search_files_query, {
-                        "filter": {"per_page": 100},
-                        "file_filter": {"basename": {"value": filename, "modifier": "EQUALS"}}
-                    })
-
-                    if search_result['data']['findFiles']['files']:
-                        # Try to find the file in the same directory
-                        for file in search_result['data']['findFiles']['files']:
-                            if os.path.dirname(file['path']) == dir_path:
-                                file_id = file['id']
-                                logger.info(f"[Add File] Found file by filename in directory: {file_id}")
-                                break
-
-                    if not file_id:
-                        raise Exception(f"File not found in Stash: {docker_path}")
+                    raise Exception(f"File not found in Stash: {docker_path}")
         except HTTPException as e:
             if attempt < max_attempts - 1:
                 logger.warning(f"[Add File] Query failed, retrying... (attempt {attempt + 1}/{max_attempts}): {e.detail}")
@@ -1585,18 +1553,23 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
             else:
                 raise Exception(f"Failed to find file in Stash: {str(e)}")
 
-    if file_id:
-        # Assign file to scene using file_id
-        assign_mutation = """
-        mutation SceneAssignFile($scene_id: ID!, $file_id: ID!) {
-          sceneAssignFile(input: { scene_id: $scene_id, file_id: $file_id }) {
+    if scene_of_file_id:
+        # Merging the scene with the new file into the existing scene
+        merge_mutation = f"""
+        mutation SceneMerge{{
+          sceneMerge(
+            input: {{
+              source: {scene_id},
+              destination: {scene_of_file_id}
+            }}
+          ) {{
             id
-          }
-        }
+          }}
+        }}
         """
 
         try:
-            result = await stash_request(assign_mutation, {"scene_id": scene_id, "file_id": file_id})
+            result = await stash_request(merge_mutation)
             logger.info(f"[Add File] Successfully added file {new_basename} to scene {scene_id}")
             return
         except HTTPException as e:
@@ -1606,53 +1579,8 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
                 return
             else:
                 logger.warning(f"[Add File] Assignment failed: {e.detail}")
-                # Try alternative method below
         except Exception as e:
             logger.warning(f"[Add File] Assignment failed: {e}")
-            # Try alternative method below
-
-    # Alternative method: use sceneUpdate with file paths
-    try:
-        # Get current scene to preserve existing files
-        scene_query = """
-        query GetScene($id: ID!) {
-          findScene(id: $id) {
-            id
-            file_ids
-          }
-        }
-        """
-
-        scene_data = await stash_request(scene_query, {"id": scene_id})
-        existing_file_ids = scene_data['data']['findScene']['file_ids'] or []
-
-        # We need the file ID for this approach
-        if not file_id:
-            raise Exception("Cannot use sceneUpdate without file ID")
-
-        # Add the new file ID
-        updated_file_ids = list(set(existing_file_ids + [file_id]))  # Remove duplicates
-
-        update_mutation = """
-        mutation SceneUpdate($input: SceneUpdateInput!) {
-          sceneUpdate(input: $input) {
-            id
-          }
-        }
-        """
-
-        update_result = await stash_request(update_mutation, {
-            "input": {
-                "id": scene_id,
-                "file_ids": updated_file_ids
-            }
-        })
-        logger.info(f"[Add File] Successfully updated scene with new file {new_basename}")
-        return
-
-    except Exception as update_error:
-        logger.warning(f"[Add File] Alternative assignment failed: {update_error}")
-        # Try one more method: direct SQL if we have permissions
 
     # Final fallback: log that manual intervention might be needed
     logger.error(f"[Add File] All methods failed to add file {new_basename} to scene {scene_id}")
