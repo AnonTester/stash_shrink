@@ -43,7 +43,8 @@ DEFAULT_CONFIG = {
         "bitrate": "1000k",
         "framerate": 30,
         "buffer_size": "2000k",
-        "container": "mp4"
+        "container": "mp4",
+        "crf": 26  # ADDED: Default CRF value
     },
     "path_mappings": []
 }
@@ -520,7 +521,7 @@ async def convert_video_threaded(task: ConversionTask):
                 framerate_option = f"-r {video_settings['framerate']}"
 
         # Simple FFmpeg command
-        ffmpeg_cmd = f"""ffmpeg -y -hide_banner -stats_period 0.5 -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\,min({video_settings['width']}/iw\,{video_settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf 28 -c:a aac -b:v {video_settings['bitrate']} -maxrate {video_settings['bitrate']} -bufsize {video_settings['buffer_size']} -f {video_settings['container']} "{temp_output}" """
+        ffmpeg_cmd = f"""ffmpeg -y -hide_banner -stats_period 0.5 -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\,min({video_settings['width']}/iw\,{video_settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf {video_settings.get('crf', 26)} -c:a aac -b:v {video_settings['bitrate']} -maxrate {video_settings['bitrate']} -bufsize {video_settings['buffer_size']} -f {video_settings['container']} "{temp_output}" """
 
         logger.debug(f"[Task {task.task_id}] FFmpeg command: {ffmpeg_cmd}")
 

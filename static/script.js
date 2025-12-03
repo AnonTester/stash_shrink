@@ -200,6 +200,15 @@ class StashShrinkApp {
             this.saveSettings(new FormData(e.target));
         });
 
+        // CRF slider value display
+        const crfSlider = document.getElementById('crf');
+        const crfValue = document.getElementById('crf-value');
+        if (crfSlider && crfValue) {
+            crfSlider.addEventListener('input', (e) => {
+                crfValue.textContent = e.target.value;
+            });
+        }
+
         // Search form
         document.getElementById('search-form').addEventListener('submit', (e) => this.handleSearch(e));
 
@@ -453,6 +462,9 @@ class StashShrinkApp {
         form.framerate.value = videoSettings.framerate || '';
         form.buffer_size.value = videoSettings.buffer_size || '';
         form.container.value = videoSettings.container || '';
+        // Populate CRF setting
+        form.crf.value = videoSettings.crf || 26;
+        document.getElementById('crf-value').textContent = videoSettings.crf || 26;
     }
 
     useVideoSettings() {
@@ -485,7 +497,8 @@ class StashShrinkApp {
                     bitrate: formData.get('bitrate') || '1000k',
                     framerate: parseFloat(formData.get('framerate')) || 30,
                     buffer_size: formData.get('buffer_size') || '2000k',
-                    container: formData.get('container') || 'mp4'
+                    container: formData.get('container') || 'mp4',
+                    crf: parseInt(formData.get('crf')) || 26  // ADDED: CRF value
                 }
             };
 

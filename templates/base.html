@@ -78,6 +78,16 @@
                                 <input type="text" id="container" name="container" value="mp4" placeholder="e.g., mp4">
                             </div>
                         </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="crf">CRF Quality (17=best, 26=default, 30=worst):</label>
+                                <div style="display: flex; align-items: center; gap: 1rem;">
+                                    <input type="range" id="crf" name="crf" min="17" max="30" value="26" step="1" style="flex: 1;">
+                                    <span id="crf-value" style="min-width: 30px; font-weight: bold;">26</span>
+                                </div>
+                                <small>Lower values = better quality but larger files. Default is 26.</small>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="form-section">
