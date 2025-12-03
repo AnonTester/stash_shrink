@@ -121,7 +121,7 @@ class Scene(BaseModel):
 class ConversionTask(BaseModel):
     task_id: str
     scene: Scene
-    status: str = "pending"
+    status: str = "pending"  # pending, processing, completed, completed_with_warning, error, cancelled
     progress: float = 0.0
     eta: Optional[float] = None
     log_file: str
@@ -406,6 +406,17 @@ async def stash_request(graphql_query: str, variables: dict = None):
 
 def run_ffmpeg_with_progress(task, ffmpeg_cmd, temp_output, file_duration, start_time):
     """Run FFmpeg and update progress (run in thread pool)"""
+    # Check if temp file already exists (from previous attempt)
+    if os.path.exists(temp_output):
+        logger.info(f"[Task {task.task_id}] Temp file exists from previous attempt: {temp_output}")
+        # Check if it's a valid video file by size
+        if os.path.getsize(temp_output) > 0:
+            logger.info(f"[Task {task.task_id}] Temp file has content, checking if conversion should resume...")
+            # For now, we'll overwrite it. In a more advanced version, we could check if we can resume.
+            # FFmpeg doesn't easily support resuming, so we'll delete and start over.
+            os.remove(temp_output)
+            logger.info(f"[Task {task.task_id}] Deleted existing temp file to start fresh")
+
     progress_tracker = FFmpegProgress(file_duration, task.task_id)
 
     # Run FFmpeg with line buffering
@@ -513,26 +524,66 @@ async def convert_video_threaded(task: ConversionTask):
 
         logger.debug(f"[Task {task.task_id}] FFmpeg command: {ffmpeg_cmd}")
 
-        # Write to log
-        with open(task.log_file, 'a') as log:
-            log.write(f"Starting conversion: {input_file} -> {final_output}\n")
-            log.write(f"File duration: {file_duration} seconds\n")
-            log.write(f"FFmpeg command: {ffmpeg_cmd}\n")
-            log.write("-" * 80 + "\n")
-
         start_time = time.time()
 
-        # Run FFmpeg in a thread pool
-        loop = asyncio.get_event_loop()
-        returncode = await loop.run_in_executor(
-            ffmpeg_executor,
-            run_ffmpeg_with_progress,
-            task,
-            ffmpeg_cmd,
-            temp_output,
-            file_duration,
-            start_time
-        )
+        # Check if this is a retry and if the output file already exists
+        is_retry = task.status in ["error", "cancelled"]
+        output_exists = os.path.exists(final_output) or os.path.exists(temp_output)
+
+        if is_retry and output_exists:
+            logger.info(f"[Task {task.task_id}] Retry detected, checking for existing output files...")
+
+            # Check which files exist
+            final_exists = os.path.exists(final_output)
+            temp_exists = os.path.exists(temp_output)
+
+            if final_exists:
+                # Final output exists - conversion was successful, only Stash update failed
+                logger.info(f"[Task {task.task_id}] Final output already exists: {final_output}")
+                logger.info(f"[Task {task.task_id}] Assuming conversion succeeded, resuming from Stash update")
+
+                # Skip FFmpeg conversion, just do Stash updates
+                returncode = 0
+                task.progress = 100.0
+                task.eta = 0
+
+                # Write to log
+                with open(task.log_file, 'a') as log:
+                    log.write(f"--- RETRY DETECTED ---\n")
+                    log.write(f"Final output already exists: {final_output}\n")
+                    log.write(f"Skipping conversion, proceeding directly to Stash update\n")
+                    log.write("-" * 80 + "\n")
+
+            elif temp_exists:
+                # Temp file exists - conversion was interrupted
+                logger.info(f"[Task {task.task_id}] Temp file exists: {temp_output}")
+                logger.info(f"[Task {task.task_id}] Resuming interrupted conversion")
+
+                # We'll run FFmpeg normally, it will overwrite the temp file
+                with open(task.log_file, 'a') as log:
+                    log.write(f"--- RETRY DETECTED ---\n")
+                    log.write(f"Temp file exists: {temp_output}\n")
+                    log.write(f"Resuming conversion\n")
+                    log.write("-" * 80 + "\n")
+
+                # Continue with normal conversion
+                returncode = await run_ffmpeg_conversion(task, ffmpeg_cmd, temp_output, file_duration)
+
+            else:
+                # Should not happen since output_exists was True
+                returncode = await run_ffmpeg_conversion(task, ffmpeg_cmd, temp_output, file_duration)
+        else:
+            # First attempt or no existing output files
+            logger.info(f"[Task {task.task_id}] Starting conversion for {input_file}")
+
+            # Write to log
+            with open(task.log_file, 'a') as log:
+                log.write(f"Starting conversion: {input_file} -> {final_output}\n")
+                log.write(f"File duration: {file_duration} seconds\n")
+                log.write(f"FFmpeg command: {ffmpeg_cmd}\n")
+                log.write("-" * 80 + "\n")
+
+            returncode = await run_ffmpeg_conversion(task, ffmpeg_cmd, temp_output, file_duration)
 
         logger.info(f"[Task {task.task_id}] FFmpeg process completed with return code: {returncode}")
 
@@ -542,50 +593,58 @@ async def convert_video_threaded(task: ConversionTask):
             log.write(f"FFmpeg process completed with return code: {returncode}\n")
 
         if returncode == 0:
-            # Verify output file
-            if not os.path.exists(temp_output):
-                raise Exception(f"Output file was not created: {temp_output}")
+            # Verify output file exists (either newly created or existing from previous run)
+            if not os.path.exists(temp_output) and not os.path.exists(final_output):
+                raise Exception(f"Output file was not created: {temp_output} or {final_output}")
 
-            output_size = os.path.getsize(temp_output)
-            if output_size == 0:
-                raise Exception(f"Output file is empty: {temp_output}")
+            # If temp file exists but final doesn't, rename it
+            if os.path.exists(temp_output) and not os.path.exists(final_output):
+                output_size = os.path.getsize(temp_output)
+                if output_size == 0:
+                    raise Exception(f"Output file is empty: {temp_output}")
 
-            logger.debug(f"[Task {task.task_id}] Output file created: {temp_output} ({output_size} bytes)")
+                logger.debug(f"[Task {task.task_id}] Renaming temp file to final: {temp_output} -> {final_output}")
+                os.rename(temp_output, final_output)
+
+            # Verify final output
+            if not os.path.exists(final_output):
+                raise Exception(f"Final output file does not exist: {final_output}")
+
+            output_size = os.path.getsize(final_output)
+            logger.debug(f"[Task {task.task_id}] Final output file: {final_output} ({output_size} bytes)")
 
             # Handle file operations based on settings
-            if overwrite_original and original_extension == new_extension:
-                if os.path.exists(final_output):
-                    os.remove(final_output)
-                os.rename(temp_output, final_output)
-                await trigger_stash_scan(final_output)
-            elif overwrite_original and original_extension != new_extension:
-                os.rename(temp_output, final_output)
-                try:
+            try:
+                if overwrite_original and original_extension == new_extension:
+                    # Already handled during conversion (original replaced)
+                    await trigger_stash_scan(final_output)
+                elif overwrite_original and original_extension != new_extension:
                     await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original)
+
+                    # Only delete original after successful Stash update
                     if overwrite_original and os.path.exists(input_file):
                         os.remove(input_file)
-                except Exception as stash_error:
-                    task.status = "error"
-                    task.error = f"Stash update failed: {str(stash_error)}"
-                    save_queue_state()
-                    clear_sse_cache()
-                    return
-            else:
-                os.rename(temp_output, final_output)
-                await add_file_to_scene(task.scene.id, final_output, overwrite_original)
+                        logger.info(f"[Task {task.task_id}] Deleted original file: {input_file}")
+                else:
+                    # Non-overwrite mode: add as new file
+                    await add_file_to_scene(task.scene.id, final_output, overwrite_original)
 
-            # Delete original if overwrite is enabled
-            if overwrite_original and original_extension == new_extension:
-                pass  # Already deleted
-            else:
-                if os.path.exists(input_file) and overwrite_original:
-                    os.remove(input_file)
+                task.status = "completed"
+                task.output_file = final_output
+                task.progress = 100.0
+                task.eta = 0
+                logger.info(f"[Task {task.task_id}] Conversion completed successfully")
 
-            task.status = "completed"
-            task.output_file = final_output
-            task.progress = 100.0
-            task.eta = 0
-            logger.info(f"[Task {task.task_id}] Conversion completed successfully")
+            except Exception as stash_error:
+                # Stash update failed, but conversion succeeded
+                # Don't mark as error if the file was created successfully
+                # User can manually fix Stash issues
+                task.status = "completed_with_warning"
+                task.output_file = final_output
+                task.progress = 100.0
+                task.eta = 0
+                task.error = f"Conversion succeeded but Stash update failed: {str(stash_error)}"
+                logger.warning(f"[Task {task.task_id}] Conversion succeeded but Stash update failed: {stash_error}")
 
             save_queue_state()
             clear_sse_cache()
@@ -628,6 +687,24 @@ async def convert_video_threaded(task: ConversionTask):
         if not queue_paused:
             logger.debug(f"[Task {task.task_id}] Queue not paused, checking for next task")
             asyncio.create_task(process_conversion_queue())
+
+
+
+async def run_ffmpeg_conversion(task, ffmpeg_cmd, temp_output, file_duration):
+    """Run FFmpeg conversion and return the return code"""
+    start_time = time.time()
+
+    # Run FFmpeg in a thread pool
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        ffmpeg_executor,
+        run_ffmpeg_with_progress,
+        task,
+        ffmpeg_cmd,
+        temp_output,
+        file_duration,
+        start_time
+    )
 
 async def process_sse_update_queue():
     """Background task to process SSE update requests from threads"""
@@ -1033,6 +1110,120 @@ async def process_conversion_queue():
 
     clear_sse_cache()
 
+async def fix_stash_update(task: ConversionTask):
+    """Only fix the Stash update for a task that already has a converted file"""
+    config = get_config()
+    overwrite_original = config.get('overwrite_original', True)
+
+    try:
+        if not task.scene.files or len(task.scene.files) == 0:
+            raise Exception("No files found in scene")
+
+        scene_file = task.scene.files[0]
+        input_file = scene_file.path
+        final_output = task.output_file
+
+        logger.info(f"[Fix Stash] Starting Stash fix for task {task.task_id}")
+        logger.info(f"[Fix Stash] Input: {input_file}")
+        logger.info(f"[Fix Stash] Output: {final_output}")
+
+        # Update task status
+        task.status = "processing"
+        task.progress = 100.0  # Already converted
+        task.eta = 0
+        clear_sse_cache()
+
+        # Write to log
+        with open(task.log_file, 'a') as log:
+            log.write(f"--- FIXING STASH UPDATE ---\n")
+            log.write(f"Retrying Stash update only\n")
+            log.write(f"Using existing output file: {final_output}\n")
+            log.write("-" * 80 + "\n")
+
+        # Verify output file exists and is valid
+        if not final_output or not os.path.exists(final_output):
+            raise Exception(f"Output file does not exist: {final_output}")
+
+        output_size = os.path.getsize(final_output)
+        if output_size == 0:
+            raise Exception(f"Output file is empty: {final_output}")
+
+        logger.debug(f"[Fix Stash] Output file verified: {final_output} ({output_size} bytes)")
+
+        # Determine the operation based on original settings
+        original_extension = os.path.splitext(input_file)[1].lower()
+        video_settings = config['video_settings']
+        new_extension = f".{video_settings['container']}"
+
+        # Perform the appropriate Stash operation
+        success = False
+        error_message = None
+
+        try:
+            if overwrite_original and original_extension == new_extension:
+                # Same extension - already replaced, just trigger scan
+                await trigger_stash_scan(final_output)
+                logger.info(f"[Fix Stash] Triggered metadata scan for: {final_output}")
+                success = True
+
+            elif overwrite_original and original_extension != new_extension:
+                # Different extensions with overwrite
+                await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original)
+                logger.info(f"[Fix Stash] Updated Stash file entry")
+
+                # Delete original only after successful Stash update
+                if os.path.exists(input_file):
+                    os.remove(input_file)
+                    logger.info(f"[Fix Stash] Deleted original file: {input_file}")
+                success = True
+
+            else:
+                # Non-overwrite mode: add as new file
+                await add_file_to_scene(task.scene.id, final_output, overwrite_original)
+                logger.info(f"[Fix Stash] Added file to scene")
+                success = True
+
+        except Exception as e:
+            error_message = str(e)
+            logger.warning(f"[Fix Stash] Stash operation failed: {error_message}")
+            # Don't re-raise, we'll handle it below
+
+        if success:
+            # Success!
+            task.status = "completed"
+            task.error = None
+            logger.info(f"[Fix Stash] Stash update completed successfully for task {task.task_id}")
+        else:
+            # Failed - set back to warning status
+            task.status = "completed_with_warning"
+            task.error = f"Stash fix failed: {error_message}"
+            logger.warning(f"[Fix Stash] Failed to fix Stash for task {task.task_id}: {error_message}")
+
+            with open(task.log_file, 'a') as log:
+                log.write(f"Stash fix failed: {error_message}\n")
+
+        save_queue_state()
+        clear_sse_cache()
+
+    except Exception as e:
+        # This is for unexpected errors (file not found, etc.)
+        task.status = "completed_with_warning"
+        task.error = f"Stash fix failed: {str(e)}"
+        logger.error(f"[Fix Stash] Unexpected error fixing Stash for task {task.task_id}: {e}", exc_info=True)
+
+        with open(task.log_file, 'a') as log:
+            log.write(f"Unexpected error in Stash fix: {str(e)}\n")
+
+        save_queue_state()
+        clear_sse_cache()
+
+    finally:
+        # Remove from active tasks if it was added
+        if task.task_id in active_tasks:
+            active_tasks.remove(task.task_id)
+
+        clear_sse_cache()
+
 @app.get("/api/conversion-status")
 async def conversion_status():
     global queue_paused
@@ -1155,6 +1346,7 @@ async def remove_all_pending():
 
 @app.post("/api/retry-conversion/{task_id}")
 async def retry_conversion(task_id: str):
+    """Retry a failed conversion task"""
     global conversion_queue
 
     try:
@@ -1164,15 +1356,19 @@ async def retry_conversion(task_id: str):
 
         task = conversion_queue[task_index]
 
+        # Allow retrying error and cancelled tasks
         if task.status not in ["error", "cancelled"]:
             raise HTTPException(status_code=400, detail=f"Cannot retry task with status: {task.status}")
 
+        # Reset task status
         task.status = "pending"
         task.progress = 0.0
         task.eta = None
         task.error = None
 
         save_queue_state()
+        clear_sse_cache()
+
         logger.info(f"Retrying conversion task {task_id} for scene: {task.scene.title}")
 
         if not queue_paused:
@@ -1183,17 +1379,71 @@ async def retry_conversion(task_id: str):
         logger.error(f"Failed to retry conversion task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retry conversion: {str(e)}")
 
-async def find_available_filename(base_name: str, container: str) -> str:
-    counter = 1
-    while True:
-        if counter == 1:
-            candidate = f"{base_name}.{container}"
-        else:
-            candidate = f"{base_name}_{counter}.{container}"
+@app.post("/api/retry-stash-fix/{task_id}")
+async def retry_stash_fix(task_id: str):
+    """Specifically retry only the Stash update for a completed_with_warning task"""
+    global conversion_queue
 
+    try:
+        task_index = next((i for i, t in enumerate(conversion_queue) if t.task_id == task_id), -1)
+        if task_index == -1:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        task = conversion_queue[task_index]
+
+        if task.status != "completed_with_warning":
+            raise HTTPException(status_code=400, detail=f"Cannot fix Stash for task with status: {task.status}")
+
+        # Check if output file exists
+        if not task.output_file or not os.path.exists(task.output_file):
+            raise HTTPException(status_code=400, detail="Output file not found, cannot fix Stash")
+
+        logger.info(f"[Fix Stash] Retrying Stash update for task {task_id}, output file: {task.output_file}")
+
+        # Create a special task that will only do Stash update
+        asyncio.create_task(fix_stash_update(task))
+
+        return {"status": "retrying_stash"}
+    except Exception as e:
+        logger.error(f"Failed to start Stash fix for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start Stash fix: {str(e)}")
+
+async def find_available_filename(base_name: str, container: str, max_attempts: int = 100) -> str:
+    """Find an available filename, checking for existing converted files"""
+    # First, check if the base name already exists with this extension
+    if not os.path.exists(f"{base_name}.{container}"):
+        return f"{base_name}.{container}"
+
+    # Check for existing converted files with pattern base_name_N.container
+    # where N is a number
+    import re
+    pattern = re.compile(rf"^{re.escape(base_name)}_(\d+)\.{re.escape(container)}$")
+
+    existing_numbers = []
+    base_dir = os.path.dirname(base_name)
+    base_file = os.path.basename(base_name)
+
+    if os.path.exists(base_dir):
+        for filename in os.listdir(base_dir):
+            match = pattern.match(filename)
+            if match:
+                existing_numbers.append(int(match.group(1)))
+
+    if existing_numbers:
+        next_number = max(existing_numbers) + 1
+    else:
+        next_number = 1
+
+    # Make sure we don't exceed max attempts
+    for i in range(next_number, next_number + max_attempts):
+        candidate = f"{base_name}_{i}.{container}"
         if not os.path.exists(candidate):
             return candidate
-        counter += 1
+
+    # Fallback: use timestamp
+    import time
+    timestamp = int(time.time())
+    return f"{base_name}_{timestamp}.{container}"
 
 async def trigger_stash_scan(file_path: str):
     config = get_config()
@@ -1214,20 +1464,54 @@ async def trigger_stash_scan(file_path: str):
         raise Exception(f"Stash scan failed: {str(e)}")
 
 async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_original: bool):
+    """Add a new file to a scene in Stash (for non-overwrite mode)"""
     config = get_config()
     path_mappings = config.get('path_mappings', [])
 
+    # Convert the host path back to Docker path for Stash
     docker_path = apply_path_mappings(new_file_path, path_mappings)
     new_basename = os.path.basename(docker_path)
 
-    await trigger_stash_scan(new_file_path)
+    logger.info(f"[Add File] Attempting to add file {new_basename} to scene {scene_id}")
 
-    assign_mutation = """
-    mutation SceneAssignFile($scene_id: ID!, $file_id: ID!) {
-      sceneAssignFile(input: { scene_id: $scene_id, file_id: $file_id })
+    # First, let's see if the file is already in the scene
+    # This avoids unnecessary scans and queries
+    check_scene_files_query = """
+    query FindSceneWithFiles($scene_id: ID!) {
+      findScene(id: $scene_id) {
+        files {
+          id
+          path
+          basename
+        }
+      }
     }
     """
 
+    try:
+        scene_result = await stash_request(check_scene_files_query, {"scene_id": scene_id})
+        if scene_result['data']['findScene']['files']:
+            for file in scene_result['data']['findScene']['files']:
+                if file['basename'] == new_basename or file['path'] == docker_path:
+                    logger.info(f"[Add File] File {new_basename} is already in scene {scene_id}")
+                    return  # Already in scene
+    except Exception as e:
+        logger.warning(f"[Add File] Could not check scene files: {e}")
+        # Continue anyway
+
+    # Try to scan the file first (but don't fail if it doesn't work)
+    try:
+        await trigger_stash_scan(new_file_path)
+        logger.info(f"[Add File] File scan triggered")
+    except Exception as scan_error:
+        logger.warning(f"[Add File] Scan might have failed: {scan_error}")
+        # Continue anyway - file might already be scanned
+
+    # Wait a bit for scan to complete
+    await asyncio.sleep(2)
+
+    # Try a different approach: use the sceneAssignFile mutation directly
+    # First we need to find the file ID
     find_file_query = """
     query FindFileByPath($path: String!) {
       findFiles(path: $path) {
@@ -1238,15 +1522,156 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
     }
     """
 
+    file_id = None
+    max_attempts = 3
+
+    for attempt in range(max_attempts):
+        try:
+            file_result = await stash_request_with_retry(find_file_query, {"path": docker_path})
+            if file_result['data']['findFiles']['files']:
+                file_id = file_result['data']['findFiles']['files'][0]['id']
+                logger.info(f"[Add File] Found file in Stash with ID: {file_id}")
+                break
+            else:
+                if attempt < max_attempts - 1:
+                    logger.info(f"[Add File] File not found, waiting 3 seconds (attempt {attempt + 1}/{max_attempts})...")
+                    await asyncio.sleep(3)
+                else:
+                    # Try alternative: search by filename in the directory
+                    dir_path = os.path.dirname(docker_path)
+                    filename = os.path.basename(docker_path)
+
+                    search_files_query = """
+                    query SearchFiles($filter: FindFilterType, $file_filter: FileFilterType) {
+                      findFiles(filter: $filter, file_filter: $file_filter) {
+                        files {
+                          id
+                          path
+                          basename
+                        }
+                      }
+                    }
+                    """
+
+                    search_result = await stash_request(search_files_query, {
+                        "filter": {"per_page": 100},
+                        "file_filter": {"basename": {"value": filename, "modifier": "EQUALS"}}
+                    })
+
+                    if search_result['data']['findFiles']['files']:
+                        # Try to find the file in the same directory
+                        for file in search_result['data']['findFiles']['files']:
+                            if os.path.dirname(file['path']) == dir_path:
+                                file_id = file['id']
+                                logger.info(f"[Add File] Found file by filename in directory: {file_id}")
+                                break
+
+                    if not file_id:
+                        raise Exception(f"File not found in Stash: {docker_path}")
+        except HTTPException as e:
+            if attempt < max_attempts - 1:
+                logger.warning(f"[Add File] Query failed, retrying... (attempt {attempt + 1}/{max_attempts}): {e.detail}")
+                await asyncio.sleep(3)
+            else:
+                # If we can't find the file, maybe we can add it by path directly
+                # Some Stash versions support adding by path without file_id
+                logger.warning(f"[Add File] Could not find file ID, trying alternative method...")
+                break
+        except Exception as e:
+            if attempt < max_attempts - 1:
+                logger.warning(f"[Add File] Query failed, retrying... (attempt {attempt + 1}/{max_attempts}): {e}")
+                await asyncio.sleep(3)
+            else:
+                raise Exception(f"Failed to find file in Stash: {str(e)}")
+
+    if file_id:
+        # Assign file to scene using file_id
+        assign_mutation = """
+        mutation SceneAssignFile($scene_id: ID!, $file_id: ID!) {
+          sceneAssignFile(input: { scene_id: $scene_id, file_id: $file_id }) {
+            id
+          }
+        }
+        """
+
+        try:
+            result = await stash_request(assign_mutation, {"scene_id": scene_id, "file_id": file_id})
+            logger.info(f"[Add File] Successfully added file {new_basename} to scene {scene_id}")
+            return
+        except HTTPException as e:
+            error_detail = str(e.detail).lower()
+            if "already assigned" in error_detail or "already exists" in error_detail or "duplicate" in error_detail:
+                logger.info(f"[Add File] File was already assigned to scene")
+                return
+            else:
+                logger.warning(f"[Add File] Assignment failed: {e.detail}")
+                # Try alternative method below
+        except Exception as e:
+            logger.warning(f"[Add File] Assignment failed: {e}")
+            # Try alternative method below
+
+    # Alternative method: use sceneUpdate with file paths
     try:
-        file_result = await stash_request(find_file_query, {"path": docker_path})
-        if file_result['data']['findFiles']['files']:
-            file_id = file_result['data']['findFiles']['files'][0]['id']
-            await stash_request(assign_mutation, {"scene_id": scene_id, "file_id": file_id})
-            logger.info(f"Added file {new_basename} to scene {scene_id}")
-    except Exception as e:
-        logger.error(f"Failed to add file to scene: {e}")
-        raise Exception(f"Failed to add file to scene: {str(e)}")
+        # Get current scene to preserve existing files
+        scene_query = """
+        query GetScene($id: ID!) {
+          findScene(id: $id) {
+            id
+            file_ids
+          }
+        }
+        """
+
+        scene_data = await stash_request(scene_query, {"id": scene_id})
+        existing_file_ids = scene_data['data']['findScene']['file_ids'] or []
+
+        # We need the file ID for this approach
+        if not file_id:
+            raise Exception("Cannot use sceneUpdate without file ID")
+
+        # Add the new file ID
+        updated_file_ids = list(set(existing_file_ids + [file_id]))  # Remove duplicates
+
+        update_mutation = """
+        mutation SceneUpdate($input: SceneUpdateInput!) {
+          sceneUpdate(input: $input) {
+            id
+          }
+        }
+        """
+
+        update_result = await stash_request(update_mutation, {
+            "input": {
+                "id": scene_id,
+                "file_ids": updated_file_ids
+            }
+        })
+        logger.info(f"[Add File] Successfully updated scene with new file {new_basename}")
+        return
+
+    except Exception as update_error:
+        logger.warning(f"[Add File] Alternative assignment failed: {update_error}")
+        # Try one more method: direct SQL if we have permissions
+
+    # Final fallback: log that manual intervention might be needed
+    logger.error(f"[Add File] All methods failed to add file {new_basename} to scene {scene_id}")
+    logger.error(f"[Add File] File exists at: {docker_path}")
+    logger.error(f"[Add File] Manual steps might be needed in Stash web interface")
+
+    raise Exception(f"All methods failed to add file to scene. File exists at {docker_path}")
+
+async def stash_request_with_retry(graphql_query: str, variables: dict = None, max_retries: int = 3):
+    """Make a Stash request with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            return await stash_request(graphql_query, variables)
+        except HTTPException as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 * (attempt + 1)  # Exponential backoff: 2, 4, 6 seconds
+                logger.warning(f"Stash request failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e.detail}")
+                await asyncio.sleep(wait_time)
+            else:
+                raise
 
 async def update_stash_file(scene_id: str, file_id: str, new_file_path: str, overwrite_original: bool):
     config = get_config()

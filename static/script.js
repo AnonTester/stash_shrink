@@ -299,6 +299,7 @@ class StashShrinkApp {
             if (action === 'remove' && taskId) this.removeFromQueue(taskId);
             if (action === 'show-log' && taskId) this.showLog(taskId);
             if (action === 'retry' && taskId) this.retryConversion(taskId);
+            if (action === 'retry-stash' && taskId) this.retryStashFix(taskId);
         });
     }
 
@@ -574,6 +575,30 @@ class StashShrinkApp {
         } catch (error) {
             console.error('Failed to retry conversion:', error);
             this.showToast('Failed to retry conversion: ' + error.message, 'error');
+        }
+    }
+
+    async retryStashFix(taskId) {
+        try {
+            this.showToast('Attempting to fix Stash update...', 'info');
+
+            const response = await fetch(`/api/retry-stash-fix/${taskId}`, { method: 'POST' });
+            if (response.ok) {
+                const result = await response.json();
+                if (result.status === 'retrying_stash') {
+                    this.showToast('Stash fix started. Check logs for details.', 'info');
+                } else {
+                    this.showToast('Stash fix status: ' + result.status, 'info');
+                }
+                // Force immediate status update
+                await this.fetchAndUpdateConversionStatus();
+            } else {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to fix Stash update');
+            }
+        } catch (error) {
+            console.error('Failed to fix Stash update:', error);
+            this.showToast('Failed to fix Stash update: ' + error.message, 'error');
         }
     }
 
@@ -1105,6 +1130,7 @@ class StashShrinkApp {
             // Only update if data has actually changed
             if (dataHash !== lastDataHash) {
                 lastDataHash = dataHash;
+                /*
                 console.log(`SSE message #${messageCount}: Data changed, updating UI`);
                 console.log('SSE Data received:', {
                     queue_length: data.queue.length,
@@ -1116,9 +1142,10 @@ class StashShrinkApp {
                         progress: t.progress
                     }))
                 });
+                */
                 this.updateConversionStatus(data);
             } else {
-                console.log(`SSE message #${messageCount}: No change detected`);
+                // console.log(`SSE message #${messageCount}: No change detected`);
             }
         };
 
@@ -1232,6 +1259,14 @@ class StashShrinkApp {
         const tbody = document.querySelector('#conversion-table tbody');
         const tableContainer = document.querySelector('.conversion-section .table-container');
         tbody.innerHTML = '';
+        const statusDisplayText = {
+            'pending': 'pending',
+            'processing': 'processing',
+            'completed': 'completed',
+            'completed_with_warning': 'warning',
+            'error': 'error',
+            'cancelled': 'cancelled'
+        };
 
         if (!queue || queue.length === 0) {
             // Hide table when no queue items
@@ -1251,6 +1286,7 @@ class StashShrinkApp {
             const sceneTitle = task.scene.title || 'Untitled';
             const isError = task.status === 'error';
             const isCancelled = task.status === 'cancelled';
+            const isWarning = task.status === 'completed_with_warning';
             const fileName = task.scene.files && task.scene.files.length > 0 ?
                 task.scene.files[0].basename : 'Unknown file';
 
@@ -1263,7 +1299,7 @@ class StashShrinkApp {
                     <div><strong>${sceneTitle}</strong></div>
                     <div style="font-size: 0.875rem; color: var(--secondary-color);">${fileName}</div>
                 </td>
-                <td class="conversion-status status-${task.status}">${task.status}</td>
+                <td class="conversion-status status-${task.status}">${statusDisplayText[task.status] || task.status}</td>
                 <td class="conversion-progress">
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: ${task.progress}%"></div>
@@ -1279,6 +1315,10 @@ class StashShrinkApp {
                         `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log">Log</button>
                          <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry">Retry</button>` :
                         ''}
+                    ${task.status === 'completed_with_warning' ?
+                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log">Log</button>
+                         <button class="btn btn-warning btn-sm" data-task-id="${task.task_id}" data-action="retry-stash">Fix Stash</button>` :
+                        ''}
                     ${task.status === 'processing' ?
                         `<button class="btn btn-danger btn-sm" data-task-id="${task.task_id}" data-action="cancel">Cancel</button>` :
                         ''}
@@ -1289,6 +1329,7 @@ class StashShrinkApp {
                 </td>
             `;
             if (isError || isCancelled) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
+            if (isWarning) row.style.backgroundColor = 'color-mix(in srgb, #ff9800 8%, transparent)';
             if (isCancelled) row.style.opacity = '0.7';
             tbody.appendChild(row);
         });
