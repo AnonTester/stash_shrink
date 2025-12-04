@@ -578,16 +578,33 @@ class StashShrinkApp {
     async retryConversion(taskId) {
         try {
             const response = await fetch(`/api/retry-conversion/${taskId}`, { method: 'POST' });
-            if (response.ok) {
-                this.showToast('Conversion retried', 'success');
+
+            if (response.status === 200) {
+                const result = await response.json();
+
+                if (result.status === 'retried') {
+                    this.showToast('Conversion retried. Task is now pending.', 'success');
+                } else {
+                    this.showToast('Conversion retry status: ' + result.status, 'info');
+                }
                 // Force immediate status update
                 await this.fetchAndUpdateConversionStatus();
-            } else {
-                throw new Error('Failed to retry conversion');
+                return;
             }
+
+            // Handle error responses
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.detail || `HTTP error ${response.status}`;
+
+            this.showToast(`Failed to retry conversion: ${errorMessage}`, 'error');
+
         } catch (error) {
             console.error('Failed to retry conversion:', error);
-            this.showToast('Failed to retry conversion: ' + error.message, 'error');
+            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                this.showToast('Network error. Please check your connection and try again.', 'error');
+            } else {
+                this.showToast('Failed to retry conversion: ' + error.message, 'error');
+            }
         }
     }
 
@@ -596,7 +613,8 @@ class StashShrinkApp {
             this.showToast('Attempting to fix Stash update...', 'info');
 
             const response = await fetch(`/api/retry-stash-fix/${taskId}`, { method: 'POST' });
-            if (response.ok) {
+
+            if (response.status === 200) {
                 const result = await response.json();
                 if (result.status === 'retrying_stash') {
                     this.showToast('Stash fix started. Check logs for details.', 'info');
@@ -605,13 +623,27 @@ class StashShrinkApp {
                 }
                 // Force immediate status update
                 await this.fetchAndUpdateConversionStatus();
-            } else {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to fix Stash update');
+                return;
             }
+
+            // Handle error responses
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.detail || `HTTP error ${response.status}`;
+
+            // Show the error message to user
+            this.showToast(`Failed to fix Stash: ${errorMessage}`, 'error');
+
+            // Force refresh to show updated task status (may have been reset to pending)
+            await this.fetchAndUpdateConversionStatus();
+
         } catch (error) {
-            console.error('Failed to fix Stash update:', error);
-            this.showToast('Failed to fix Stash update: ' + error.message, 'error');
+            console.error('Failed to fix Stash update:', error, error.message);
+            // Provide more user-friendly error message
+            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                this.showToast('Network error. Please check your connection and try again.', 'error');
+            } else {
+                this.showToast('Failed to fix Stash update: ' + error.message, 'error');
+            }
         }
     }
 
@@ -619,7 +651,7 @@ class StashShrinkApp {
         try {
             const response = await fetch(`/api/remove-from-queue/${taskId}`, { method: 'POST' });
             if (response.ok) {
-                this.showToast('Task removed from queue', 'success');
+               this.showToast('Task removed from queue', 'success');
             } else {
                 throw new Error('Failed to remove task from queue');
             }
@@ -1300,6 +1332,8 @@ class StashShrinkApp {
             const isError = task.status === 'error';
             const isCancelled = task.status === 'cancelled';
             const isWarning = task.status === 'completed_with_warning';
+            const isPending = task.status === 'pending';
+            const hasErrorDetail = task.error && task.error.length > 0;
             const fileName = task.scene.files && task.scene.files.length > 0 ?
                 task.scene.files[0].basename : 'Unknown file';
 
@@ -1325,25 +1359,38 @@ class StashShrinkApp {
                 <td class="conversion-actions">
                     <div class="action-buttons-container">
                     ${task.status === 'error' || task.status === 'cancelled' ?
-                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log">Log</button>
-                         <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry">Retry</button>` :
+                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log" title="View conversion log">Log</button>
+                         <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry" title="Retry this conversion">Retry</button>` :
                         ''}
                     ${task.status === 'completed_with_warning' ?
-                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log">Log</button>
-                         <button class="btn btn-warning btn-sm" data-task-id="${task.task_id}" data-action="retry-stash">Fix Stash</button>` :
+                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log" title="View conversion log">Log</button>
+                         <button class="btn btn-warning btn-sm" data-task-id="${task.task_id}" data-action="retry-stash" title="Retry only the Stash update">Fix Stash</button>` :
                         ''}
                     ${task.status === 'processing' ?
-                        `<button class="btn btn-danger btn-sm" data-task-id="${task.task_id}" data-action="cancel">Cancel</button>` :
+                        `<button class="btn btn-danger btn-sm" data-task-id="${task.task_id}" data-action="cancel" title="Cancel this conversion">Cancel</button>` :
                         ''}
                     ${task.status === 'pending' || task.status === 'completed' ?
-                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove">Remove</button>` :
+                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove" title="Remove from queue">Remove</button>` :
                         ''}
                     </div>
                 </td>
             `;
+
+            // Add error detail tooltip if available
+            if (hasErrorDetail) {
+                row.querySelector('.conversion-status').title = task.error;
+                row.querySelector('.conversion-status').style.cursor = 'help';
+            }
+
+            // Style rows based on status
             if (isError || isCancelled) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
             if (isWarning) row.style.backgroundColor = 'color-mix(in srgb, #ff9800 8%, transparent)';
-            if (isCancelled) row.style.opacity = '0.7';
+            if (isPending && hasErrorDetail && task.error.includes('missing')) {
+                // Highlight pending tasks that were reset due to missing files
+                row.style.backgroundColor = 'color-mix(in srgb, #ff9800 15%, transparent)';
+            }
+             if (isCancelled) row.style.opacity = '0.7';
+
             tbody.appendChild(row);
         });
     }

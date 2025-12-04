@@ -1124,6 +1124,10 @@ async def fix_stash_update(task: ConversionTask):
         input_file = scene_file.path
         final_output = task.output_file
 
+        # Double-check that output file still exists (it could have been deleted between check and now)
+        if not final_output or not os.path.exists(final_output):
+            raise Exception(f"Output file no longer exists: {final_output}")
+
         logger.info(f"[Fix Stash] Starting Stash fix for task {task.task_id}")
         logger.info(f"[Fix Stash] Input: {input_file}")
         logger.info(f"[Fix Stash] Output: {final_output}")
@@ -1159,16 +1163,19 @@ async def fix_stash_update(task: ConversionTask):
         # Perform the appropriate Stash operation
         success = False
         error_message = None
+        stash_operation = "unknown"
 
         try:
             if overwrite_original and original_extension == new_extension:
                 # Same extension - already replaced, just trigger scan
+                stash_operation = "scan"
                 await trigger_stash_scan(final_output)
                 logger.info(f"[Fix Stash] Triggered metadata scan for: {final_output}")
                 success = True
 
             elif overwrite_original and original_extension != new_extension:
                 # Different extensions with overwrite
+                stash_operation = "update"
                 await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original)
                 logger.info(f"[Fix Stash] Updated Stash file entry")
 
@@ -1180,13 +1187,14 @@ async def fix_stash_update(task: ConversionTask):
 
             else:
                 # Non-overwrite mode: add as new file
+                stash_operation = "add"
                 await add_file_to_scene(task.scene.id, final_output, overwrite_original)
                 logger.info(f"[Fix Stash] Added file to scene")
                 success = True
 
         except Exception as e:
             error_message = str(e)
-            logger.warning(f"[Fix Stash] Stash operation failed: {error_message}")
+            logger.warning(f"[Fix Stash] Stash operation '{stash_operation}' failed: {error_message}")
             # Don't re-raise, we'll handle it below
 
         if success:
@@ -1197,7 +1205,9 @@ async def fix_stash_update(task: ConversionTask):
         else:
             # Failed - set back to warning status
             task.status = "completed_with_warning"
-            task.error = f"Stash fix failed: {error_message}"
+            # If the error is about missing file, provide clearer message
+            error_detail = error_message or "Unknown error"
+            task.error = f"Stash fix failed: {error_detail}"
             logger.warning(f"[Fix Stash] Failed to fix Stash for task {task.task_id}: {error_message}")
 
             with open(task.log_file, 'a') as log:
@@ -1214,6 +1224,11 @@ async def fix_stash_update(task: ConversionTask):
 
         with open(task.log_file, 'a') as log:
             log.write(f"Unexpected error in Stash fix: {str(e)}\n")
+
+        # If the error is specifically about missing file, reset to pending
+        if "no longer exists" in str(e) or "does not exist" in str(e):
+            task.status = "pending"
+            task.error = "Output file missing. Reset to pending for full retry."
 
         save_queue_state()
         clear_sse_cache()
@@ -1397,7 +1412,22 @@ async def retry_stash_fix(task_id: str):
 
         # Check if output file exists
         if not task.output_file or not os.path.exists(task.output_file):
-            raise HTTPException(status_code=400, detail="Output file not found, cannot fix Stash")
+            # Output file is missing. This could mean:
+            # 1. User deleted the file
+            # 2. File was renamed/moved
+            # 3. File was manually imported into Stash
+            # Reset task to pending so user can retry the full conversion
+            task.status = "pending"
+            task.progress = 0.0
+            task.eta = None
+            task.error = "Output file missing. Reset to pending for full retry."
+            save_queue_state()
+            clear_sse_cache()
+            logger.warning(f"[Stash Fix] Output file missing for task {task_id}, reset to pending")
+            raise HTTPException(
+                status_code=400,
+                detail="Output file not found. Task has been reset to pending. You can retry the full conversion or remove the task."
+            )
 
         logger.info(f"[Fix Stash] Retrying Stash update for task {task_id}, output file: {task.output_file}")
 
@@ -1405,8 +1435,11 @@ async def retry_stash_fix(task_id: str):
         asyncio.create_task(fix_stash_update(task))
 
         return {"status": "retrying_stash"}
+    except HTTPException:
+        # Re-raise HTTP exceptions so they reach the client with proper details
+        raise
     except Exception as e:
-        logger.error(f"Failed to start Stash fix for task {task_id}: {e}")
+        logger.error(f"Failed to start Stash fix for task {task_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to start Stash fix: {str(e)}")
 
 async def find_available_filename(base_name: str, container: str, max_attempts: int = 100) -> str:
@@ -1514,7 +1547,7 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
     # Try to find the scene id of the new file path
     find_scene_of_file_query = """
     query FindSceneByPath($scene_filter: SceneFilterType!){
-      findScenes(scene_filter: $scene_filter){    
+      findScenes(scene_filter: $scene_filter){
         scenes{
           id
         }
