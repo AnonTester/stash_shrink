@@ -224,8 +224,14 @@ class StashShrinkApp {
         document.getElementById('select-none').addEventListener('click', () => this.selectNone());
         document.getElementById('select-invert').addEventListener('click', () => this.selectInvert());
         document.getElementById('select-all-checkbox').addEventListener('change', (e) => {
-            if (e.target.checked) this.selectAll();
-            else this.selectNone();
+            const currentPageScenes = this.getCurrentPageSceneIds();
+            const selectableSceneIds = currentPageScenes.filter(id => !this.queuedSceneIds.has(id));
+
+            if (e.target.checked && selectableSceneIds.length > 0) {
+                this.selectAll();
+            } else {
+                this.selectNone();
+            }
         });
 
         // Conversion
@@ -764,16 +770,17 @@ class StashShrinkApp {
 
             const isQueued = this.queuedSceneIds.has(scene.id);
             const isSelected = this.selectedScenes.has(scene.id) && !isQueued;
-            const checkboxDisabled = isQueued ? 'disabled' : '';
+            const checkboxDisabled = isQueued;
+            const checkboxTitle = isQueued ? 'Already in conversion queue' : isSelected ? 'Selected for conversion' : 'Click to select';
 
             const row = document.createElement('tr');
 
             row.innerHTML = `
-                 <td>
+                <td>
                     <input type="checkbox" class="scene-checkbox" value="${scene.id}"
                            ${isSelected ? 'checked' : ''}
-                           ${checkboxDisabled}
-                           ${isQueued ? 'title="Already in conversion queue"' : ''}>
+                           ${checkboxDisabled ? 'disabled' : ''}
+                           title="${checkboxTitle}">
                     ${isQueued ? '<div style="font-size:10px;color:var(--success-color);">Queued</div>' : ''}
                 </td>
                 <td class="title-cell" title="${scene.title || 'Untitled'}">
@@ -799,7 +806,7 @@ class StashShrinkApp {
 
             // Update tooltip for queued scenes
             if (isQueued) {
-                row.querySelector('.scene-checkbox').title = "Already in conversion queue";
+                row.querySelector('.scene-checkbox').style.cursor = 'not-allowed';
             }
         });
 
@@ -934,52 +941,66 @@ class StashShrinkApp {
     }
 
     selectAll() {
-        // Don't select queued scenes
-        const currentPageScenes = this.getCurrentPageSceneIds().filter(id =>
+        // Get all scene IDs on current page (including queued ones for reference)
+        const allCurrentPageSceneIds = this.getCurrentPageSceneIds();
+
+        // Filter out queued scenes and only select non-queued ones
+        const selectableSceneIds = allCurrentPageSceneIds.filter(id =>
             !this.queuedSceneIds.has(id)
         );
-        currentPageScenes.forEach(id => this.selectedScenes.add(id));
-        this.updateSelectionControls();
+
+        // Add all selectable scenes to selected set
+        selectableSceneIds.forEach(id => this.selectedScenes.add(id));
+
+        // Re-render to update checkboxes
+        this.renderResults();
     }
 
     selectNone() {
-        const currentPageScenes = this.getCurrentPageSceneIds();
-        currentPageScenes.forEach(id => this.selectedScenes.delete(id));
+        // Clear all selections (including queued ones won't be selectable anyway)
+        this.selectedScenes.clear();
         this.renderResults();
     }
 
     selectInvert() {
-        const currentPageScenes = this.getCurrentPageSceneIds();
-        currentPageScenes.forEach(id => {
-            // Skip queued scenes
-            if (this.queuedSceneIds.has(id)) return;
+        const currentPageSceneIds = this.getCurrentPageSceneIds();
+
+        currentPageSceneIds.forEach(id => {
+            // Skip queued scenes - they can't be selected
+            if (this.queuedSceneIds.has(id)) {
+                return;
+            }
+
             if (this.selectedScenes.has(id)) {
                 this.selectedScenes.delete(id);
             } else {
                 this.selectedScenes.add(id);
             }
         });
+
         this.renderResults();
     }
 
     getCurrentPageSceneIds() {
-        let displayResults = [...this.currentResults];
+        // Start with current results
+        const displayResults = [...this.currentResults];
 
-        // Apply sorting
+        // Apply sorting if active
         if (this.sortField && this.sortDirection) {
-            displayResults.sort((a, b) => {
-                let aVal = this.getSortValue(a, this.sortField);
-                let bVal = this.getSortValue(b, this.sortField);
+            displayResults.sort((sceneA, sceneB) => {
+                const aVal = this.getSortValue(sceneA, this.sortField);
+                const bVal = this.getSortValue(sceneB, this.sortField);
 
                 if (typeof aVal === 'string') {
-                    aVal = aVal.toLowerCase();
-                    bVal = bVal.toLowerCase();
-                }
-
-                if (this.sortDirection === 'asc') {
-                    return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+                    const aLower = aVal.toLowerCase();
+                    const bLower = bVal.toLowerCase();
+                    if (this.sortDirection === 'asc') {
+                        return aLower.localeCompare(bLower);
+                    } else {
+                        return bLower.localeCompare(aLower);
+                    }
                 } else {
-                    return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+                    return this.sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
                 }
             });
         }
@@ -994,16 +1015,38 @@ class StashShrinkApp {
 
     updateSelectionControls() {
         const currentPageScenes = this.getCurrentPageSceneIds();
-        const selectedCount = currentPageScenes.filter(id => this.selectedScenes.has(id)).length;
+
+        // Count only selectable scenes (non-queued) that are selected
+        const selectableSceneIds = currentPageScenes.filter(id => !this.queuedSceneIds.has(id));
+        const selectedCount = selectableSceneIds.filter(id => this.selectedScenes.has(id)).length;
         const allSelected = selectedCount === currentPageScenes.length;
+        const allSelectableSelected = selectedCount === selectableSceneIds.length && selectableSceneIds.length > 0;
 
         document.getElementById('select-all-checkbox').checked = allSelected;
-        document.getElementById('select-all-checkbox').indeterminate = selectedCount > 0 && !allSelected;
+        document.getElementById('select-all-checkbox').indeterminate = selectedCount > 0 && !allSelectableSelected;
+
+        // Update the select all checkbox title for clarity
+        const selectAllCheckbox = document.getElementById('select-all-checkbox');
+        if (selectableSceneIds.length === 0) {
+            selectAllCheckbox.title = "No selectable scenes on this page";
+            selectAllCheckbox.disabled = true;
+        } else {
+            selectAllCheckbox.title = `Select all ${selectableSceneIds.length} selectable scenes on this page`;
+            selectAllCheckbox.disabled = false;
+        }
     }
 
     async queueConversion() {
         if (this.isFirstRun) {
             this.showToast('Please complete the first-time setup by saving the configuration.', 'warning');
+            return;
+        }
+
+        // Get only selectable scenes (non-queued) that are selected
+        const selectableSelectedScenes = Array.from(this.selectedScenes).filter(id => !this.queuedSceneIds.has(id));
+
+        if (selectableSelectedScenes.length === 0) {
+            this.showToast('Please select at least one scene to convert. Note: Already queued scenes cannot be selected.', 'warning');
             return;
         }
 

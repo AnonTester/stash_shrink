@@ -436,6 +436,13 @@ input, select {
     margin: 0;
 }
 
+/* Disabled checkbox styling */
+.data-table input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    accent-color: var(--secondary-color);
+}
+
 /* Link styling */
 .data-table a {
     color: var(--primary-color);

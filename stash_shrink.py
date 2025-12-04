@@ -6,9 +6,7 @@ import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import uuid
-import signal
 import subprocess
-import shutil
 import re
 import time
 import concurrent.futures
@@ -27,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "1.1.0"
+VERSION = "2.0.0"
 
 # Configuration
 CONFIG_FILE = "config.json"
@@ -37,7 +35,7 @@ LOGS_DIR = "logs"
 DEFAULT_CONFIG = {
     "stash_url": "http://localhost:9999",
     "api_key": "",
-    "overwrite_original": True,
+    "overwrite_original": False,
     "default_search_limit": 50,
     "max_concurrent_tasks": 2,
     "video_settings": {
