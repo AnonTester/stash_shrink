@@ -1552,6 +1552,7 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
           id
         }
       }
+    }
     """
 
     scene_of_file_id = None
@@ -1559,6 +1560,7 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
 
     for attempt in range(max_attempts):
         try:
+            logger.info(f"[Add File] Trying to find new scene of converted file")
             scene_of_file_result = await stash_request_with_retry(find_scene_of_file_query, {"scene_filter": {"path": {"value": docker_path, "modifier": "EQUALS"}}})
             if scene_of_file_result['data']['findScenes']['scenes']:
                 scene_of_file_id = scene_of_file_result['data']['findScenes']['scenes'][0]['id']
@@ -1592,8 +1594,8 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
         mutation SceneMerge{{
           sceneMerge(
             input: {{
-              source: {scene_id},
-              destination: {scene_of_file_id}
+              source: {scene_of_file_id},
+              destination: {scene_id}
             }}
           ) {{
             id
@@ -1631,6 +1633,7 @@ async def stash_request_with_retry(graphql_query: str, variables: dict = None, m
             if attempt < max_retries - 1:
                 wait_time = 2 * (attempt + 1)  # Exponential backoff: 2, 4, 6 seconds
                 logger.warning(f"Stash request failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e.detail}")
+                logger.warning(f"Stash query:\n{graphql_query}\nVariables:\n{variables}")
                 await asyncio.sleep(wait_time)
             else:
                 raise
