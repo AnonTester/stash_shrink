@@ -24,6 +24,9 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2>{% if show_settings %}Welcome to Stash Shrink - First Time Setup{% else %}Settings{% endif %}</h2>
+                <div style="font-size: 0.875rem; color: var(--secondary-color); margin-top: 0.25rem;">
+                    Version {{ version }}
+                </div>
                 {% if not show_settings %}
                 <span class="close">&times;</span>
                 {% endif %}

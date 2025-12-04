@@ -540,11 +540,30 @@ class StashShrinkApp {
     async cancelConversion(taskId) {
         try {
             const response = await fetch(`/api/cancel-conversion/${taskId}`, { method: 'POST' });
-            if (response.ok) {
-                this.showToast('Conversion cancelled', 'success');
-            } else {
-                throw new Error('Failed to cancel conversion');
+
+            if (response.status === 200) {
+                const result = await response.json();
+                if (result.status === 'cancelled') {
+                    this.showToast('Conversion cancelled', 'success');
+                } else if (result.status === 'not_cancellable') {
+                    this.showToast('Task cannot be cancelled in its current state', 'warning');
+                } else if (result.status === 'already_cancelled') {
+                    this.showToast('Task is already cancelled', 'info');
+                } else {
+                    this.showToast('Task status: ' + result.status, 'info');
+                }
+                // Force immediate status update
+                await this.fetchAndUpdateConversionStatus();
+                return;
+            } else if (response.status === 404) {
+                this.showToast('Task not found', 'error');
             }
+
+            // Handle error responses
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.detail || `HTTP error ${response.status}`;
+            this.showToast(`Failed to cancel conversion: ${errorMessage}`, 'error');
+
         } catch (error) {
             console.error('Failed to cancel conversion:', error);
             this.showToast('Failed to cancel conversion: ' + error.message, 'error');
@@ -650,11 +669,25 @@ class StashShrinkApp {
     async removeFromQueue(taskId) {
         try {
             const response = await fetch(`/api/remove-from-queue/${taskId}`, { method: 'POST' });
-            if (response.ok) {
-               this.showToast('Task removed from queue', 'success');
-            } else {
-                throw new Error('Failed to remove task from queue');
+            if (response.status === 200) {
+                 const result = await response.json();
+                 if (result.status === 'removed') {
+                    let message = 'Task removed from queue';
+                    if (result.status_was === 'cancelled') {
+                        message += ' (temporary files cleaned up)';
+                    }
+                    this.showToast(message, 'success');
+                }
+                // Force immediate status update
+                await this.fetchAndUpdateConversionStatus();
+                return;
             }
+
+            // Handle error responses
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.detail || `HTTP error ${response.status}`;
+            this.showToast(`Failed to remove task from queue: ${errorMessage}`, 'error');
+
         } catch (error) {
             console.error('Failed to remove from queue:', error);
             this.showToast('Failed to remove task from queue: ' + error.message, 'error');
@@ -1329,17 +1362,50 @@ class StashShrinkApp {
         queue.forEach(task => {
             const row = document.createElement('tr');
             const sceneTitle = task.scene.title || 'Untitled';
+
+            // Determine task status
             const isError = task.status === 'error';
             const isCancelled = task.status === 'cancelled';
             const isWarning = task.status === 'completed_with_warning';
             const isPending = task.status === 'pending';
+            const isProcessing = task.status === 'processing';
+            const isCompleted = task.status === 'completed';
+
             const hasErrorDetail = task.error && task.error.length > 0;
             const fileName = task.scene.files && task.scene.files.length > 0 ?
                 task.scene.files[0].basename : 'Unknown file';
 
-            // Only show ETA for processing tasks
-            const etaText = task.status === 'processing' && task.eta && task.eta > 0 ?
-                this.formatTime(task.eta) : '';
+            // Determine what to display in progress column
+            let progressDisplay = '';
+            if (isProcessing || isPending || isCompleted) {
+                // Show progress bar for active/in-progress tasks
+                progressDisplay = `
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${task.progress}%"></div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.875rem; margin-top: 0.25rem;">
+                        <span>${task.progress.toFixed(1)}%</span>
+                        ${isProcessing && task.eta && task.eta > 0 ? `<span style="color: var(--secondary-color);">ETA: ${this.formatTime(task.eta)}</span>` : ''}
+                    </div>`;
+            } else {
+                // For error/cancelled/warning, just show status text
+                progressDisplay = `<div style="padding: 0.5rem; color: var(--secondary-color);">${task.error || 'No progress available'}</div>`;
+            }
+
+            // Determine which buttons to show based on status
+            let actionButtons = '';
+
+            if (isError || isCancelled) {
+                actionButtons = `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log" title="View conversion log">Log</button>
+                                 <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry" title="Retry this conversion">Retry</button>`;
+            } else if (isWarning) {
+                actionButtons = `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log" title="View conversion log">Log</button>
+                                 <button class="btn btn-warning btn-sm" data-task-id="${task.task_id}" data-action="retry-stash" title="Retry only the Stash update">Fix Stash</button>`;
+            } else if (task.status === 'processing') {
+                actionButtons = `<button class="btn btn-danger btn-sm" data-task-id="${task.task_id}" data-action="cancel" title="Cancel this conversion">Cancel</button>`;
+            } else if (isPending || isCompleted || isCancelled) {
+                actionButtons = `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove" title="Remove from queue">Remove</button>`;
+            }
 
             row.innerHTML = `
                 <td class="conversion-title">
@@ -1348,30 +1414,11 @@ class StashShrinkApp {
                 </td>
                 <td class="conversion-status status-${task.status}">${statusDisplayText[task.status] || task.status}</td>
                 <td class="conversion-progress">
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: ${task.progress}%"></div>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; font-size: 0.875rem; margin-top: 0.25rem;">
-                        <span>${task.progress.toFixed(1)}%</span>
-                        ${etaText ? `<span style="color: var(--secondary-color);">ETA: ${etaText}</span>` : ''}
-                    </div>
+                    ${progressDisplay}
                 </td>
                 <td class="conversion-actions">
                     <div class="action-buttons-container">
-                    ${task.status === 'error' || task.status === 'cancelled' ?
-                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log" title="View conversion log">Log</button>
-                         <button class="btn btn-primary btn-sm" data-task-id="${task.task_id}" data-action="retry" title="Retry this conversion">Retry</button>` :
-                        ''}
-                    ${task.status === 'completed_with_warning' ?
-                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="show-log" title="View conversion log">Log</button>
-                         <button class="btn btn-warning btn-sm" data-task-id="${task.task_id}" data-action="retry-stash" title="Retry only the Stash update">Fix Stash</button>` :
-                        ''}
-                    ${task.status === 'processing' ?
-                        `<button class="btn btn-danger btn-sm" data-task-id="${task.task_id}" data-action="cancel" title="Cancel this conversion">Cancel</button>` :
-                        ''}
-                    ${task.status === 'pending' || task.status === 'completed' ?
-                        `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove" title="Remove from queue">Remove</button>` :
-                        ''}
+                    ${actionButtons}
                     </div>
                 </td>
             `;
@@ -1383,13 +1430,16 @@ class StashShrinkApp {
             }
 
             // Style rows based on status
-            if (isError || isCancelled) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
+            if (isError) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
+            if (isCancelled) row.style.backgroundColor = 'color-mix(in srgb, var(--secondary-color) 12%, transparent)';
             if (isWarning) row.style.backgroundColor = 'color-mix(in srgb, #ff9800 8%, transparent)';
+            if (isCancelled || isError) {
+                row.style.opacity = '0.8';
+            }
             if (isPending && hasErrorDetail && task.error.includes('missing')) {
                 // Highlight pending tasks that were reset due to missing files
                 row.style.backgroundColor = 'color-mix(in srgb, #ff9800 15%, transparent)';
             }
-             if (isCancelled) row.style.opacity = '0.7';
 
             tbody.appendChild(row);
         });

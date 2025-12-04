@@ -26,6 +26,9 @@ import uvicorn
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Version
+VERSION = "1.1.0"
+
 # Configuration
 CONFIG_FILE = "config.json"
 LOGS_DIR = "logs"
@@ -593,6 +596,19 @@ async def convert_video_threaded(task: ConversionTask):
             log.write("-" * 80 + "\n")
             log.write(f"FFmpeg process completed with return code: {returncode}\n")
 
+        # Check if task was cancelled before processing result
+        if task.status == "cancelled":
+            logger.info(f"[Task {task.task_id}] Task was cancelled, skipping result processing")
+            if 'temp_output' in locals() and os.path.exists(temp_output):
+                try:
+                    os.remove(temp_output)
+                    logger.debug(f"[Task {task.task_id}] Cleaned up temp file for cancelled task: {temp_output}")
+                except Exception as cleanup_error:
+                    logger.error(f"[Task {task.task_id}] Failed to clean up temp file: {cleanup_error}")
+            save_queue_state()
+            clear_sse_cache()
+            return
+
         if returncode == 0:
             # Verify output file exists (either newly created or existing from previous run)
             if not os.path.exists(temp_output) and not os.path.exists(final_output):
@@ -652,27 +668,32 @@ async def convert_video_threaded(task: ConversionTask):
             logger.debug(f"[Task {task.task_id}] Queue state saved and SSE cache cleared")
 
         else:
-            task.status = "error"
-            task.error = f"FFmpeg failed with return code {returncode}"
-            logger.error(f"[Task {task.task_id}] FFmpeg conversion failed for {input_file}")
-            logger.error(f"[Task {task.task_id}] Error details saved to: {task.log_file}")
+            # Check if task was cancelled during processing
+            if task.status != "cancelled":
+                task.status = "error"
+                task.error = f"FFmpeg failed with return code {returncode}"
+                logger.error(f"[Task {task.task_id}] FFmpeg conversion failed for {input_file}")
+                logger.error(f"[Task {task.task_id}] Error details saved to: {task.log_file}")
+            else:
+                logger.info(f"[Task {task.task_id}] Task cancelled, FFmpeg return code: {returncode}")
+
             save_queue_state()
             clear_sse_cache()
 
     except Exception as e:
-        task.status = "error"
-        task.error = str(e)
+        # Only set to error if not already cancelled
+        if task.status != "cancelled":
+            task.status = "error"
+            task.error = str(e)
         logger.error(f"[Task {task.task_id}] Conversion failed: {e}", exc_info=True)
 
+        # Clean up temp file if exists
         if 'temp_output' in locals() and os.path.exists(temp_output):
             try:
                 os.remove(temp_output)
-                logger.debug(f"[Task {task.task_id}] Cleaned up temp file: {temp_output}")
+                logger.debug(f"[Task {task.task_id}] Cleaned up temp file after error: {temp_output}")
             except Exception as cleanup_error:
                 logger.error(f"[Task {task.task_id}] Failed to clean up temp file: {cleanup_error}")
-
-        save_queue_state()
-        clear_sse_cache()
 
     finally:
         # Remove from active tasks
@@ -780,7 +801,8 @@ async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {
         "request": request,
         "config": config,
-        "show_settings": show_settings
+        "show_settings": show_settings,
+        "version": VERSION
     })
 
 @app.get("/api/config")
@@ -1256,21 +1278,32 @@ async def conversion_status():
 async def cancel_conversion(task_id: str):
     for i, task in enumerate(conversion_queue):
         if task.task_id == task_id:
-            if task.status == "processing":
-                task.status = "cancelled"
-                task.error = "Conversion cancelled by user"
+            # Only allow cancelling of pending or processing tasks
+            if task.status not in ["pending", "processing"]:
+                if task.status == "cancelled":
+                    logger.info(f"Task {task_id} is already cancelled")
+                    return {"status": "already_cancelled"}
+                else:
+                    logger.info(f"Task {task_id} has status {task.status}, not cancelling")
+                    return {"status": "not_cancellable"}
 
-                if task_id in active_tasks:
-                    active_tasks.remove(task_id)
+            # Mark as cancelled
+            task.status = "cancelled"
+            task.error = "Conversion cancelled by user"
 
-                logger.info(f"Marked processing task {task_id} as cancelled for scene: {task.scene.title}")
-            elif task.status == "pending":
-                task.status = "cancelled"
-                task.error = "Conversion cancelled by user"
+            # Clean up temporary files if they exist (only for processing tasks)
+            if task.status_was == "processing" and task.output_file:
+                temp_file = f"{task.output_file}.converting"
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                        logger.info(f"Removed temporary file for cancelled task {task_id}: {temp_file}")
+                    except Exception as e:
+                        logger.error(f"Failed to remove temporary file for task {task_id}: {e}")
+
+            if task_id in active_tasks:
+                active_tasks.remove(task_id)
                 logger.info(f"Marked pending task {task_id} as cancelled for scene: {task.scene.title}")
-            elif task.status == "cancelled":
-                logger.info(f"Task {task_id} is already cancelled")
-                return {"status": "already_cancelled"}
             else:
                 logger.info(f"Task {task_id} has status {task.status}, not cancelling")
                 return {"status": "not_cancellable"}
@@ -1278,6 +1311,8 @@ async def cancel_conversion(task_id: str):
             try:
                 with open(task.log_file, 'a') as log:
                     log.write(f"\n--- Conversion cancelled by user ---\n")
+                    log.write(f"Task cancelled at: {time.time()}\n")
+                    log.write(f"Status changed from {task.status} to cancelled\n")
             except Exception as e:
                 logger.error(f"Failed to write cancellation to log: {e}")
 
@@ -1291,6 +1326,17 @@ async def clear_completed():
     global conversion_queue
     tasks_to_keep = [task for task in conversion_queue if task.status in ["pending", "processing", "cancelled"]]
     tasks_removed = len(conversion_queue) - len(tasks_to_keep)
+
+    # Clean up temporary files for cancelled tasks being removed
+    for task in conversion_queue:
+        if task.status == "cancelled" and task not in tasks_to_keep:
+            if task.output_file and os.path.exists(task.output_file + ".converting"):
+                try:
+                    os.remove(task.output_file + ".converting")
+                    logger.info(f"Cleaned up temporary file for removed cancelled task {task.task_id}")
+                except Exception as e:
+                    logger.error(f"Failed to clean up temporary file for task {task.task_id}: {e}")
+
     conversion_queue = tasks_to_keep
     save_queue_state()
     logger.info(f"Cleared {tasks_removed} completed/error tasks from queue")
@@ -1301,7 +1347,8 @@ async def cancel_all_conversions():
     global conversion_queue
     cancelled_count = 0
 
-    task_ids = [task.task_id for task in conversion_queue]
+    # Only cancel tasks that can be cancelled (processing or pending)
+    task_ids = [task.task_id for task in conversion_queue if task.status in ["processing", "pending"]]
 
     for task_id in task_ids:
         try:
@@ -1334,16 +1381,42 @@ async def start_processing():
 
 @app.post("/api/remove-from-queue/{task_id}")
 async def remove_from_queue(task_id: str):
+    """Remove a task from the queue, cleaning up temporary files if cancelled"""
     global conversion_queue
-    tasks_to_keep = [task for task in conversion_queue if str(task.task_id) != str(task_id)]
-    removed_count = len(conversion_queue) - len(tasks_to_keep)
-    conversion_queue = tasks_to_keep
 
-    if task_id in task_status:
-        del task_status[task_id]
+    try:
+        # Find the task to remove
+        task_index = next((i for i, t in enumerate(conversion_queue) if t.task_id == task_id), -1)
+        if task_index == -1:
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    save_queue_state()
-    return {"status": "removed", "count": removed_count}
+        task = conversion_queue[task_index]
+
+        # Clean up temporary files if task was processing or cancelled
+        temp_file = None
+        if task.output_file:
+            temp_file = f"{task.output_file}.converting"
+
+        # Also check for .converting suffix in output_file itself
+        if task.output_file and task.output_file.endswith('.converting'):
+            temp_file = task.output_file
+
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+                logger.info(f"Cleaned up temporary file for removed task {task_id}: {temp_file}")
+            except Exception as e:
+                logger.error(f"Failed to clean up temporary file for task {task_id}: {e}")
+
+        # Remove from queue
+        conversion_queue = [task for task in conversion_queue if str(task.task_id) != str(task_id)]
+
+        save_queue_state()
+        return {"status": "removed", "task_id": task_id, "status_was": task.status}
+
+    except Exception as e:
+        logger.error(f"Failed to remove task {task_id} from queue: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to remove task: {str(e)}")
 
 @app.post("/api/remove-all-pending")
 async def remove_all_pending():
