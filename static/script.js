@@ -1138,6 +1138,13 @@ class StashShrinkApp {
     showConversionSection() {
         console.log('Showing conversion section');
 
+        // Check if we have any tasks to show
+        if (!this.lastConversionStatus || !this.lastConversionStatus.queue || this.lastConversionStatus.queue.length === 0) {
+            console.log('No tasks in queue, staying in search section');
+            this.showToast('Conversion queue is empty', 'info');
+            return;
+        }
+
         // Hide other sections
         if (this.searchSection) this.searchSection.style.display = 'none';
         if (this.resultsSection) this.resultsSection.style.display = 'none';
@@ -1353,7 +1360,10 @@ class StashShrinkApp {
 
         // Update pause button state
         this.updatePauseButton();
-        document.getElementById('toggle-pause').disabled = !hasActiveOrPending;
+        const togglePauseBtn = document.getElementById('toggle-pause');
+        if (togglePauseBtn) {
+            togglePauseBtn.disabled = !hasActiveOrPending;
+        }
 
         return {
             hasActiveOrPending, hasCompleted, hasErrors,
@@ -1378,6 +1388,14 @@ class StashShrinkApp {
         if (this.progressOverview) {
             this.progressOverview.style.display = hasAnyTasks ? 'block' : 'none';
         }
+
+        // NEW: If there are no tasks and we're in the conversion section, automatically switch back to search
+        if (!hasAnyTasks && this.conversionSection && this.conversionSection.style.display === 'block') {
+            console.log('Queue is empty, automatically switching back to search section');
+            this.showSearchSection();
+        }
+
+        return buttonStates;
     }
 
     renderConversionTable(queue) {
