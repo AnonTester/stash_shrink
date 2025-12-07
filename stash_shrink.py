@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 # Configuration
 CONFIG_FILE = "config.json"
@@ -1102,6 +1102,7 @@ async def queue_conversion(scene_ids: List[str]):
         raise HTTPException(status_code=500, detail=f"Failed to queue conversion: {str(e)}")
 
 async def process_conversion_queue():
+    global queue_paused
     config = get_config()
 
     if queue_paused:
@@ -1111,6 +1112,17 @@ async def process_conversion_queue():
     pending_tasks = [task for task in conversion_queue if task.status in ["pending"]]
     if not pending_tasks:
         logger.debug("No pending tasks to process")
+
+        # Check if all tasks are finished and auto-pause if needed
+        all_finished = all(
+            task.status in ["cancelled", "completed", "error", "completed_with_warning"]
+            for task in conversion_queue
+        )
+        if all_finished and not queue_paused:
+            queue_paused = True
+            logger.info("All tasks finished, automatically pausing queue")
+            clear_sse_cache()
+
         return
 
     available_slots = config['max_concurrent_tasks'] - len(active_tasks)
@@ -1274,6 +1286,8 @@ async def conversion_status():
 
 @app.post("/api/cancel-conversion/{task_id}")
 async def cancel_conversion(task_id: str):
+    global queue_paused
+
     for i, task in enumerate(conversion_queue):
         if task.task_id == task_id:
             # Only allow cancelling of pending or processing tasks
@@ -1285,12 +1299,15 @@ async def cancel_conversion(task_id: str):
                     logger.info(f"Task {task_id} has status {task.status}, not cancelling")
                     return {"status": "not_cancellable"}
 
+            # Store the current status for logging
+            old_status = task.status
+
             # Mark as cancelled
             task.status = "cancelled"
             task.error = "Conversion cancelled by user"
 
             # Clean up temporary files if they exist (only for processing tasks)
-            if task.status_was == "processing" and task.output_file:
+            if old_status == "processing" and task.output_file:
                 temp_file = f"{task.output_file}.converting"
                 if os.path.exists(temp_file):
                     try:
@@ -1301,20 +1318,29 @@ async def cancel_conversion(task_id: str):
 
             if task_id in active_tasks:
                 active_tasks.remove(task_id)
-                logger.info(f"Marked pending task {task_id} as cancelled for scene: {task.scene.title}")
+                logger.info(f"Marked task {task_id} as cancelled for scene: {task.scene.title}")
             else:
-                logger.info(f"Task {task_id} has status {task.status}, not cancelling")
-                return {"status": "not_cancellable"}
+                logger.info(f"Marked pending task {task_id} as cancelled for scene: {task.scene.title}")
 
             try:
                 with open(task.log_file, 'a') as log:
                     log.write(f"\n--- Conversion cancelled by user ---\n")
                     log.write(f"Task cancelled at: {time.time()}\n")
-                    log.write(f"Status changed from {task.status} to cancelled\n")
+                    log.write(f"Status changed from {old_status} to cancelled\n")
             except Exception as e:
                 logger.error(f"Failed to write cancellation to log: {e}")
 
             save_queue_state()
+
+            # Check if all tasks are now cancelled/completed/error and auto-pause
+            all_finished = all(
+                task.status in ["cancelled", "completed", "error", "completed_with_warning"]
+                for task in conversion_queue
+            )
+            if all_finished and not queue_paused:
+                queue_paused = True
+                logger.info("All tasks finished, automatically pausing queue")
+
             break
 
     return {"status": "cancelled"}
@@ -1434,7 +1460,7 @@ async def remove_all_pending():
 @app.post("/api/retry-conversion/{task_id}")
 async def retry_conversion(task_id: str):
     """Retry a failed conversion task"""
-    global conversion_queue
+    global conversion_queue, queue_paused
 
     try:
         task_index = next((i for i, t in enumerate(conversion_queue) if t.task_id == task_id), -1)
@@ -1458,8 +1484,12 @@ async def retry_conversion(task_id: str):
 
         logger.info(f"Retrying conversion task {task_id} for scene: {task.scene.title}")
 
+        # Don't automatically start processing - respect the queue pause state
+        # Only start processing if queue is not paused
         if not queue_paused:
             asyncio.create_task(process_conversion_queue())
+        else:
+            logger.info(f"Queue is paused, task {task_id} will remain pending until queue is started")
 
         return {"status": "retried"}
     except Exception as e:

@@ -551,6 +551,8 @@ class StashShrinkApp {
                 const result = await response.json();
                 if (result.status === 'cancelled') {
                     this.showToast('Conversion cancelled', 'success');
+                    // Force immediate status update to reflect auto-pause if applicable
+                    await this.fetchAndUpdateConversionStatus();
                 } else if (result.status === 'not_cancellable') {
                     this.showToast('Task cannot be cancelled in its current state', 'warning');
                 } else if (result.status === 'already_cancelled') {
@@ -558,8 +560,6 @@ class StashShrinkApp {
                 } else {
                     this.showToast('Task status: ' + result.status, 'info');
                 }
-                // Force immediate status update
-                await this.fetchAndUpdateConversionStatus();
                 return;
             } else if (response.status === 404) {
                 this.showToast('Task not found', 'error');
@@ -574,7 +574,7 @@ class StashShrinkApp {
             console.error('Failed to cancel conversion:', error);
             this.showToast('Failed to cancel conversion: ' + error.message, 'error');
         }
-     }
+    }
 
     async showLog(taskId) {
         try {
@@ -608,7 +608,11 @@ class StashShrinkApp {
                 const result = await response.json();
 
                 if (result.status === 'retried') {
-                    this.showToast('Conversion retried. Task is now pending.', 'success');
+                    let message = 'Conversion retried. Task is now pending.';
+                    if (this.isQueuePaused) {
+                        message += ' Queue is paused - start queue to begin processing.';
+                    }
+                    this.showToast(message, 'success');
                 } else {
                     this.showToast('Conversion retry status: ' + result.status, 'info');
                 }
