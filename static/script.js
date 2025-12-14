@@ -169,6 +169,31 @@ class StashShrinkApp {
         }, 300);
     }
 
+    async extractErrorMessage(response) {
+        try {
+            const cloned = response.clone();
+            const data = await cloned.json();
+
+            if (data) {
+                if (typeof data.detail === 'string') return data.detail;
+                if (Array.isArray(data.detail)) return data.detail.join(', ');
+                if (data.errors) {
+                    const errorMessages = Array.isArray(data.errors) ? data.errors : [data.errors];
+                    return errorMessages.map(err => err.message || err).join(', ');
+                }
+            }
+        } catch (jsonError) {
+            console.warn('Failed to parse error JSON response', jsonError);
+        }
+
+        try {
+            return await response.text();
+        } catch (textError) {
+            console.warn('Failed to read error response text', textError);
+            return '';
+        }
+    }
+
     handleFirstRun() {
         if (this.isFirstRun) {
             // Add first-run class to body to dim the background
@@ -1059,30 +1084,52 @@ class StashShrinkApp {
             return;
         }
 
-        try {
-            const response = await fetch('/api/queue-conversion', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(Array.from(this.selectedScenes))
-            });
+        const maxAttempts = 5;
+        const backoffTimes = [2000, 4000, 8000, 12000];
+        const sceneIds = Array.from(this.selectedScenes);
+        let lastError = '';
 
-            if (response.ok) {
-                this.showConversionSection();
-                this.startSSE();
-                const responseData = await response.json();
-                this.updateQueuedSceneIds(responseData.queue || []);
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                const response = await fetch('/api/queue-conversion', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(sceneIds)
+                });
 
-                // Start processing if not paused
-                if (!this.isQueuePaused) this.startQueueProcessing();
-                this.showToast(`Queued ${this.selectedScenes.size} scenes for conversion.`, 'success');
-            } else {
-                throw new Error('Failed to queue conversion');
+                if (response.ok) {
+                    this.showConversionSection();
+                    this.startSSE();
+                    const responseData = await response.json();
+                    this.updateQueuedSceneIds(responseData.queue || []);
+
+                    // Start processing if not paused
+                    if (!this.isQueuePaused) this.startQueueProcessing();
+                    this.showToast(`Queued ${sceneIds.length} scenes for conversion.`, 'success');
+                    return;
+                }
+
+                const errorMessage = await this.extractErrorMessage(response);
+                throw new Error(errorMessage || 'Failed to queue conversion');
+            } catch (error) {
+                lastError = error.message || 'Unknown error';
+
+                if (attempt < maxAttempts) {
+                    const waitTime = backoffTimes[attempt - 1] || backoffTimes[backoffTimes.length - 1];
+                    this.showToast(
+                        `Queue request failed (attempt ${attempt} of ${maxAttempts}): ${lastError}. Retrying in ${waitTime / 1000} seconds...`,
+                        'warning',
+                        waitTime + 1000
+                    );
+                    console.warn(`Queue request failed, retrying in ${waitTime}ms:`, error);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                } else {
+                    console.error('Add to queue failed after retries:', error);
+                    this.showToast('Failed to queue conversion: ' + lastError, 'error');
+                }
             }
-        } catch (error) {
-            console.error('Add to queue failed:', error);
-            this.showToast('Failed to queue conversion: ' + error.message, 'error');
         }
     }
 

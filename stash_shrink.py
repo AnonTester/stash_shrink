@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 
 # Configuration
 CONFIG_FILE = "config.json"
@@ -371,7 +371,24 @@ async def stash_request(graphql_query: str, variables: dict = None):
                 logger.debug(f"Stash response body: {response.text}")
 
             response.raise_for_status()
-            result = response.json()
+
+            try:
+                result = response.json()
+            except ValueError:
+                logger.error("Failed to parse JSON from Stash response", exc_info=True)
+                logger.debug(f"Raw response body: {response.text}")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Unexpected response format from Stash (invalid JSON)"
+                )
+
+            if not result:
+                logger.error("Stash response body was empty or null")
+                raise HTTPException(status_code=400, detail="Empty response received from Stash")
+
+            if not isinstance(result, dict):
+                logger.error(f"Stash response JSON is not an object: {result}")
+                raise HTTPException(status_code=400, detail="Unexpected response structure from Stash")
 
             if 'data' in result and 'findScenes' in result['data']:
                 scenes_count = len(result['data']['findScenes'].get('scenes', []))
@@ -403,7 +420,7 @@ async def stash_request(graphql_query: str, variables: dict = None):
             pass
         raise HTTPException(status_code=400, detail=error_detail)
     except Exception as e:
-        logger.error(f"Unexpected error during Stash request: {e}")
+        logger.exception(f"Unexpected error during Stash request: {e}")
         raise HTTPException(status_code=400, detail=f"Unexpected error contacting Stash: {str(e)}")
 
 def run_ffmpeg_with_progress(task, ffmpeg_cmd, temp_output, file_duration, start_time):
@@ -1060,7 +1077,7 @@ async def queue_conversion(scene_ids: List[str]):
         }
         """
 
-        result = await stash_request(scenes_query, {"ids": scene_ids})
+        result = await stash_request_with_retry(scenes_query, {"ids": scene_ids})
         if 'errors' in result:
             raise HTTPException(status_code=400, detail=result['errors'])
 
@@ -1097,6 +1114,9 @@ async def queue_conversion(scene_ids: List[str]):
 
         return {"status": "queued", "count": queued_count}
 
+    except HTTPException as e:
+        logger.error(f"Error queueing conversion due to Stash error: {e.detail}", exc_info=True)
+        raise
     except Exception as e:
         logger.error(f"Error queueing conversion: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to queue conversion: {str(e)}")
@@ -1725,19 +1745,33 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
 
     raise Exception(f"All methods failed to add file to scene. File exists at {docker_path}")
 
-async def stash_request_with_retry(graphql_query: str, variables: dict = None, max_retries: int = 3):
+async def stash_request_with_retry(graphql_query: str, variables: dict = None, max_retries: int = 5):
     """Make a Stash request with retry logic"""
+    wait_times = [2, 4, 8, 12]
+    last_exception = None
+
     for attempt in range(max_retries):
         try:
             return await stash_request(graphql_query, variables)
         except HTTPException as e:
+            last_exception = e
             if attempt < max_retries - 1:
-                wait_time = 2 * (attempt + 1)  # Exponential backoff: 2, 4, 6 seconds
-                logger.warning(f"Stash request failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e.detail}")
+                wait_time = wait_times[attempt] if attempt < len(wait_times) else wait_times[-1]
+                logger.warning(
+                    f"Stash request failed (attempt {attempt + 1}/{max_retries}), "
+                    f"retrying in {wait_time}s: {e.detail}"
+                )
                 logger.warning(f"Stash query:\n{graphql_query}\nVariables:\n{variables}")
                 await asyncio.sleep(wait_time)
             else:
+                logger.error(
+                    f"Stash request failed after {max_retries} attempts: {e.detail}",
+                    exc_info=True
+                )
                 raise
+
+    if last_exception:
+        raise last_exception
 
 async def update_stash_file(scene_id: str, file_id: str, new_file_path: str, overwrite_original: bool):
     config = get_config()

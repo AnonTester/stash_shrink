@@ -78,7 +78,7 @@ enable virtual environment:
 cd stash_shrink
 source .venv/bin/activate
 ```
-then start tube-q
+then start Stash Shrink
 
 ```bash
 python3 stash_shrink.py
