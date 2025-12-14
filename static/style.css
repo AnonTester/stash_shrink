@@ -599,6 +599,27 @@ input, select {
     text-align: center;
 }
 
+/* Conversion table title/link handling */
+.conversion-title {
+    overflow: hidden;
+}
+
+.conversion-title .title-link {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.conversion-filepath {
+    color: var(--secondary-color);
+    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Conversion table specific styling */
 .conversion-actions {
     vertical-align: middle !important;
@@ -926,21 +947,15 @@ body.first-run header {
         justify-content: center;
     }
 
-    /* Search results table: hide duration, file size, and path columns on narrow screens */
-    .results-section .data-table th:nth-child(3),
-    .results-section .data-table td:nth-child(3), /* Duration */
-    .results-section .data-table th:nth-child(4),
-    .results-section .data-table td:nth-child(4), /* File Size */
-    .results-section .data-table th:nth-child(10),
-    .results-section .data-table td:nth-child(10) { /* Path */
-        display: none;
+    /* Search results table: maintain columns and allow scrolling */
+    .results-section .data-table {
+        min-width: 780px;
     }
 
-    /* Adjust remaining column widths for search results table */
     .results-section .data-table th:nth-child(2),
     .results-section .data-table td:nth-child(2) {
         width: 40%; /* Title column - more space */
-        min-width: 120px;
+        min-width: 200px;
     }
 
     /* Keep checkbox column narrow */
@@ -996,6 +1011,38 @@ body.first-run header {
     .modal-content {
         width: 95%;
         margin: 10% auto;
+    }
+}
+
+/* Conversion table stacked rows on mobile */
+@media (max-width: 768px) {
+    .conversion-task-row-primary td {
+        border-bottom: none;
+    }
+
+    .conversion-task-row-secondary td {
+        border-top: none;
+    }
+
+    .conversion-task-row-secondary .conversion-actions .btn {
+        width: 100%;
+        margin-bottom: 0.35rem;
+    }
+
+    .conversion-task-row-secondary .conversion-actions .btn:last-child {
+        margin-bottom: 0;
+    }
+
+    .cancel-all-btn {
+        width: 100%;
+        margin-left: 0;
+    }
+}
+
+/* Desktop alignment for cancel all button */
+@media (min-width: 769px) {
+    .cancel-all-btn {
+        margin-left: auto;
     }
 }
 

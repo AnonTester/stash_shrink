@@ -810,7 +810,6 @@ class StashShrinkApp {
                            ${isSelected ? 'checked' : ''}
                            ${checkboxDisabled ? 'disabled' : ''}
                            title="${checkboxTitle}">
-                    ${isQueued ? '<div style="font-size:10px;color:var(--success-color);">Queued</div>' : ''}
                 </td>
                 <td class="title-cell" title="${scene.title || 'Untitled'}">
                     <a href="${this.config.stash_url}/scenes/${scene.id}" target="_blank">${scene.title || 'Untitled'}</a>
@@ -1445,9 +1444,42 @@ class StashShrinkApp {
         return buttonStates;
     }
 
+    async cancelAllConversions() {
+        try {
+            const response = await fetch('/api/cancel-all-conversions', { method: 'POST' });
+            if (response.ok) {
+                const data = await response.json();
+                this.showToast(`Cancelled ${data.count || 0} conversion${(data.count || 0) === 1 ? '' : 's'}`, 'info');
+                await this.fetchAndUpdateConversionStatus();
+            } else {
+                throw new Error('Failed to cancel all conversions');
+            }
+        } catch (error) {
+            console.error('Failed to cancel all conversions:', error);
+            this.showToast('Failed to cancel all conversions: ' + error.message, 'error');
+        }
+    }
+
+    async clearCompleted() {
+        try {
+            const response = await fetch('/api/clear-completed', { method: 'POST' });
+            if (response.ok) {
+                this.showToast('Cleared completed and errored tasks', 'success');
+                await this.fetchAndUpdateConversionStatus();
+            } else {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || 'Failed to clear completed tasks');
+            }
+        } catch (error) {
+            console.error('Failed to clear completed tasks:', error);
+            this.showToast('Failed to clear completed tasks: ' + error.message, 'error');
+        }
+    }
+
     renderConversionTable(queue) {
         const tbody = document.querySelector('#conversion-table tbody');
         const tableContainer = document.querySelector('.conversion-section .table-container');
+        const isMobile = window.matchMedia('(max-width: 768px)').matches;
         tbody.innerHTML = '';
         const statusDisplayText = {
             'pending': 'pending',
@@ -1472,8 +1504,8 @@ class StashShrinkApp {
         if (tableContainer) tableContainer.style.display = 'block';
 
         queue.forEach(task => {
-            const row = document.createElement('tr');
             const sceneTitle = task.scene.title || 'Untitled';
+            const stashSceneUrl = this.config?.stash_url ? `${this.config.stash_url}/scenes/${task.scene.id}` : '#';
 
             // Determine task status
             const isError = task.status === 'error';
@@ -1484,8 +1516,9 @@ class StashShrinkApp {
             const isCompleted = task.status === 'completed';
 
             const hasErrorDetail = task.error && task.error.length > 0;
-            const fileName = task.scene.files && task.scene.files.length > 0 ?
-                task.scene.files[0].basename : 'Unknown file';
+            const fileDetails = task.scene.files && task.scene.files.length > 0 ? task.scene.files[0] : null;
+            const fileName = fileDetails?.basename || 'Unknown file';
+            const filePath = fileDetails?.path || 'Unknown file';
 
             // Determine what to display in progress column
             let progressDisplay = '';
@@ -1519,41 +1552,100 @@ class StashShrinkApp {
                 actionButtons = `<button class="btn btn-secondary btn-sm" data-task-id="${task.task_id}" data-action="remove" title="Remove from queue">Remove</button>`;
             }
 
-            row.innerHTML = `
-                <td class="conversion-title">
-                    <div><strong>${sceneTitle}</strong></div>
-                    <div style="font-size: 0.875rem; color: var(--secondary-color);">${fileName}</div>
-                </td>
-                <td class="conversion-status status-${task.status}">${statusDisplayText[task.status] || task.status}</td>
-                <td class="conversion-progress">
-                    ${progressDisplay}
-                </td>
-                <td class="conversion-actions">
-                    <div class="action-buttons-container">
-                    ${actionButtons}
-                    </div>
-                </td>
-            `;
+            if (isMobile) {
+                const primaryRow = document.createElement('tr');
+                const secondaryRow = document.createElement('tr');
+                primaryRow.classList.add('conversion-task-row-primary', 'conversion-task-row');
+                secondaryRow.classList.add('conversion-task-row-secondary', 'conversion-task-row');
 
-            // Add error detail tooltip if available
-            if (hasErrorDetail) {
-                row.querySelector('.conversion-status').title = task.error;
-                row.querySelector('.conversion-status').style.cursor = 'help';
-            }
+                primaryRow.innerHTML = `
+                    <td class="conversion-title" colspan="4" title="${sceneTitle}">
+                        <a class="title-link" href="${stashSceneUrl}" target="_blank" rel="noopener noreferrer">${sceneTitle}</a>
+                        <div class="conversion-filepath" title="${filePath}">${this.truncatePath(filePath, 80)}</div>
+                    </td>
+                `;
 
-            // Style rows based on status
-            if (isError) row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
-            if (isCancelled) row.style.backgroundColor = 'color-mix(in srgb, var(--secondary-color) 12%, transparent)';
-            if (isWarning) row.style.backgroundColor = 'color-mix(in srgb, #ff9800 8%, transparent)';
-            if (isCancelled || isError) {
-                row.style.opacity = '0.8';
-            }
-            if (isPending && hasErrorDetail && task.error.includes('missing')) {
-                // Highlight pending tasks that were reset due to missing files
-                row.style.backgroundColor = 'color-mix(in srgb, #ff9800 15%, transparent)';
-            }
+                secondaryRow.innerHTML = `
+                    <td class="conversion-status status-${task.status}" ${hasErrorDetail ? `title="${task.error}"` : ''}>${statusDisplayText[task.status] || task.status}</td>
+                    <td class="conversion-progress" colspan="2">
+                        ${progressDisplay}
+                    </td>
+                    <td class="conversion-actions">
+                        <div class="action-buttons-container">
+                        ${actionButtons}
+                        </div>
+                    </td>
+                `;
 
-            tbody.appendChild(row);
+                const mobileRows = [primaryRow, secondaryRow];
+
+                if (hasErrorDetail) {
+                    const statusCell = secondaryRow.querySelector('.conversion-status');
+                    statusCell.style.cursor = 'help';
+                }
+
+                // Style rows based on status
+                if (isError) {
+                    mobileRows.forEach(row => row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)');
+                }
+                if (isCancelled) {
+                    mobileRows.forEach(row => row.style.backgroundColor = 'color-mix(in srgb, var(--secondary-color) 12%, transparent)');
+                }
+                if (isWarning) {
+                    mobileRows.forEach(row => row.style.backgroundColor = 'color-mix(in srgb, #ff9800 8%, transparent)');
+                }
+                if (isCancelled || isError) {
+                    mobileRows.forEach(row => row.style.opacity = '0.8');
+                }
+                if (isPending && hasErrorDetail && task.error.includes('missing')) {
+                    mobileRows.forEach(row => row.style.backgroundColor = 'color-mix(in srgb, #ff9800 15%, transparent)');
+                }
+
+                tbody.appendChild(primaryRow);
+                tbody.appendChild(secondaryRow);
+            } else {
+                const row = document.createElement('tr');
+                row.classList.add('conversion-task-row');
+
+                row.innerHTML = `
+                    <td class="conversion-title" title="${sceneTitle}">
+                        <a class="title-link" href="${stashSceneUrl}" target="_blank" rel="noopener noreferrer">${sceneTitle}</a>
+                        <div class="conversion-filepath" title="${filePath}">${this.truncatePath(filePath, 80)}</div>
+                    </td>
+                    <td class="conversion-status status-${task.status}" ${hasErrorDetail ? `title="${task.error}"` : ''}>${statusDisplayText[task.status] || task.status}</td>
+                    <td class="conversion-progress">
+                        ${progressDisplay}
+                    </td>
+                    <td class="conversion-actions">
+                        <div class="action-buttons-container">
+                        ${actionButtons}
+                        </div>
+                    </td>
+                `;
+
+                if (hasErrorDetail) {
+                    const statusCell = row.querySelector('.conversion-status');
+                    statusCell.style.cursor = 'help';
+                }
+
+                if (isError) {
+                    row.style.backgroundColor = 'color-mix(in srgb, var(--danger-color) 8%, transparent)';
+                }
+                if (isCancelled) {
+                    row.style.backgroundColor = 'color-mix(in srgb, var(--secondary-color) 12%, transparent)';
+                }
+                if (isWarning) {
+                    row.style.backgroundColor = 'color-mix(in srgb, #ff9800 8%, transparent)';
+                }
+                if (isCancelled || isError) {
+                    row.style.opacity = '0.8';
+                }
+                if (isPending && hasErrorDetail && task.error.includes('missing')) {
+                    row.style.backgroundColor = 'color-mix(in srgb, #ff9800 15%, transparent)';
+                }
+
+                tbody.appendChild(row);
+            }
         });
     }
 
@@ -1625,6 +1717,7 @@ class StashShrinkApp {
                 const response = await fetch('/api/remove-all-pending', { method: 'POST' });
                 if (response.ok) {
                     this.showToast('All pending conversions removed from queue', 'success');
+                    await this.fetchAndUpdateConversionStatus();
                 } else {
                     throw new Error('Failed to remove all pending conversions');
                 }
