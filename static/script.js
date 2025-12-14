@@ -485,6 +485,11 @@ class StashShrinkApp {
     showUpdateModal() {
         if (!this.updateModal) return;
         this.updateModal.style.display = 'block';
+        this.updateModal.style.zIndex = '1100';
+        const settingsModal = document.getElementById('settings-modal');
+        if (settingsModal) {
+            settingsModal.style.zIndex = '1000';
+        }
         document.body.style.overflow = 'hidden';
     }
 
@@ -586,6 +591,8 @@ class StashShrinkApp {
 
             if (!hasUpdate) {
                 this.showToast('Already on the latest version.', 'info', 4000);
+                this.hideUpdateModal();
+                return;
             }
 
             this.showUpdateModal();

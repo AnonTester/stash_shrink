@@ -779,6 +779,10 @@ input, select {
     background-color: rgba(0, 0, 0, 0.8);
 }
 
+#update-modal {
+    z-index: 1100;
+}
+
 .modal.first-run .modal-content {
     max-width: 700px;
     width: 90%;
@@ -811,6 +815,10 @@ input, select {
     padding: 0;
     display: flex;
     flex-direction: column;
+}
+
+.modal-body {
+    padding: 1rem 1.5rem;
 }
 
 #log-content {

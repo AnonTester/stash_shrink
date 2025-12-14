@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 
 def compute_cache_buster() -> str:
@@ -95,11 +95,12 @@ update_status = {
     "current_version": VERSION,
     "latest_version": VERSION,
     "latest_tag": f"v{VERSION}",
+    "latest_branch": None,
     "update_available": False,
     "commits": [],
     "last_checked": None,
     "error": None,
-    "updating": False
+    "updating": False,
 }
 
 # Thread pool for FFmpeg processes
@@ -395,10 +396,58 @@ def version_tuple(version: str) -> tuple:
 def is_newer_version(latest: str, current: str) -> bool:
     return version_tuple(latest) > version_tuple(current)
 
-
-async def fetch_commits_between_versions(client: httpx.AsyncClient, current_version: str, latest_tag: str) -> List[str]:
+def get_local_git_ref() -> Optional[str]:
     try:
-        compare_url = f"{GITHUB_API_BASE}/compare/{normalize_tag(current_version)}...{latest_tag}"
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        )
+        git_ref = result.stdout.strip()
+        return git_ref or None
+    except Exception as e:
+        logger.warning(f"Unable to determine local git reference: {e}")
+        return None
+
+
+async def fetch_default_branch(client: httpx.AsyncClient) -> str:
+    try:
+        response = await client.get(
+            GITHUB_API_BASE, headers={"Accept": "application/vnd.github+json"}
+        )
+        response.raise_for_status()
+        return response.json().get("default_branch", "main")
+    except Exception as e:
+        logger.warning(f"Failed to fetch default branch, using 'main': {e}")
+        return "main"
+
+
+async def fetch_latest_commit_info(
+    client: httpx.AsyncClient, branch: str
+) -> tuple[Optional[str], Optional[str]]:
+    try:
+        commit_url = f"{GITHUB_API_BASE}/commits"
+        response = await client.get(
+            commit_url,
+            params={"sha": branch, "per_page": 1},
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        response.raise_for_status()
+        commits = response.json()
+        if isinstance(commits, list) and commits:
+            latest_commit = commits[0]
+            sha = latest_commit.get("sha")
+            message = latest_commit.get("commit", {}).get("message", "").split("\n")[0]
+            return sha, message
+        return None, None
+    except Exception as e:
+        logger.warning(f"Failed to fetch latest commit info: {e}")
+        return None, None
+
+
+async def fetch_commits_between_refs(
+    client: httpx.AsyncClient, current_ref: str, latest_ref: str
+) -> List[str]:
+    try:
+        compare_url = f"{GITHUB_API_BASE}/compare/{current_ref}...{latest_ref}"
         response = await client.get(compare_url, headers={"Accept": "application/vnd.github+json"})
         if response.status_code == 404:
             return []
@@ -423,25 +472,25 @@ async def check_for_updates(force: bool = False) -> Dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            release_response = await client.get(
-                f"{GITHUB_API_BASE}/releases/latest",
-                headers={"Accept": "application/vnd.github+json"},
-            )
+            current_ref = get_local_git_ref()
+            default_branch = await fetch_default_branch(client)
+            latest_ref, _ = await fetch_latest_commit_info(client, default_branch)
 
-            release_response.raise_for_status()
-            release_data = release_response.json()
-            latest_tag = release_data.get("tag_name") or normalize_tag(VERSION)
-            latest_version = latest_tag.lstrip("v")
+            if not latest_ref:
+                raise RuntimeError("Unable to determine latest commit from GitHub")
 
-            update_available = is_newer_version(latest_version, VERSION)
-            commits = []
-            if update_available:
-                commits = await fetch_commits_between_versions(client, VERSION, latest_tag)
+            update_available = bool(current_ref and latest_ref and current_ref != latest_ref)
+            commits: List[str] = []
+            if update_available and current_ref:
+                commits = await fetch_commits_between_refs(client, current_ref, latest_ref)
+            elif not current_ref:
+                logger.warning("Local git reference not found; update check may be unreliable")
 
             update_status = {
                 "current_version": VERSION,
-                "latest_version": latest_version,
-                "latest_tag": latest_tag,
+                "latest_version": (latest_ref or "")[:7] or VERSION,
+                "latest_tag": latest_ref or normalize_tag(VERSION),
+                "latest_branch": default_branch,
                 "update_available": update_available,
                 "commits": commits,
                 "last_checked": now,
@@ -449,7 +498,7 @@ async def check_for_updates(force: bool = False) -> Dict[str, Any]:
                 "updating": update_status.get("updating", False),
             }
             logger.info(
-                f"Update check complete - current: {VERSION}, latest: {latest_version}, "
+                f"Update check complete - current: {VERSION}, latest: {update_status['latest_version']}, "
                 f"available: {update_available}"
             )
             clear_sse_cache()
@@ -459,6 +508,7 @@ async def check_for_updates(force: bool = False) -> Dict[str, Any]:
             "current_version": VERSION,
             "latest_version": VERSION,
             "latest_tag": normalize_tag(VERSION),
+            "latest_branch": update_status.get("latest_branch"),
             "update_available": False,
             "commits": [],
             "last_checked": now,
@@ -470,9 +520,10 @@ async def check_for_updates(force: bool = False) -> Dict[str, Any]:
     return update_status
 
 
-def perform_git_update(target_ref: str):
+def perform_git_update(target_ref: str, branch: Optional[str] = None):
     repo_path = Path(__file__).resolve().parent
     commands = [
+        ["git", "fetch", "origin"] if not branch else ["git", "fetch", "origin", branch],
         ["git", "fetch", "origin", "--tags"],
         ["git", "checkout", target_ref],
         ["git", "reset", "--hard", target_ref],
@@ -486,9 +537,9 @@ def perform_git_update(target_ref: str):
             )
 
 
-async def apply_self_update(target_ref: str):
+async def apply_self_update(target_ref: str, branch: Optional[str] = None):
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, perform_git_update, target_ref)
+    await loop.run_in_executor(None, perform_git_update, target_ref, branch)
 
 
 async def restart_application(delay_seconds: int = 1):
@@ -1047,6 +1098,7 @@ async def force_update_check():
 async def apply_update():
     global update_status
     latest_info = await check_for_updates(force=True)
+    latest_branch = latest_info.get("latest_branch")
 
     if latest_info.get("updating"):
         return {"status": "in_progress", "message": "Update already in progress"}
@@ -1057,7 +1109,9 @@ async def apply_update():
     try:
         update_status["updating"] = True
         clear_sse_cache()
-        await apply_self_update(latest_info.get("latest_tag", normalize_tag(VERSION)))
+        await apply_self_update(
+            latest_info.get("latest_tag", normalize_tag(VERSION)), latest_branch
+        )
         asyncio.create_task(restart_application())
         return {"status": "updating", "message": "Update applied. Restarting application."}
     except Exception as e:
