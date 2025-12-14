@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.0.4"
+VERSION = "2.1.0"
 
 # Configuration
 CONFIG_FILE = "config.json"
