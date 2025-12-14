@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Stash Shrink{% endblock %}</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v={{ static_version }}">
 </head>
 <body data-show-settings="{{ show_settings }}">
     <header>
         <div class="header-content">
-            <h1><img src="/static/logo.png" width="50px" border=0 style="vertical-align: middle;" /> Stash Shrink</h1>
+            <h1><img src="/static/logo.png?v={{ static_version }}" width="50px" border=0 style="vertical-align: middle;" /> Stash Shrink</h1>
             <button id="settings-btn" class="btn btn-secondary" {% if show_settings %}style="display: none;"{% endif %}>Settings</button>
         </div>
     </header>
@@ -23,13 +23,16 @@
     <div id="settings-modal" class="modal {% if show_settings %}first-run{% endif %}" {% if show_settings %}style="display: block;"{% endif %}>
         <div class="modal-content">
             <div class="modal-header">
-                <h2>{% if show_settings %}Welcome to Stash Shrink - First Time Setup{% else %}Settings{% endif %}</h2>
-                <div style="font-size: 0.875rem; color: var(--secondary-color); margin-top: 0.25rem;">
-                    Version {{ version }}
+                <div class="modal-title-group">
+                    <h2>{% if show_settings %}Welcome to Stash Shrink - First Time Setup{% else %}Settings{% endif %}</h2>
+                    <div class="modal-subtext">Version {{ version }}</div>
                 </div>
-                {% if not show_settings %}
-                <span class="close">&times;</span>
-                {% endif %}
+                <div class="modal-actions">
+                    <button type="button" id="check-updates-btn" class="btn btn-secondary">Check for Updates</button>
+                    {% if not show_settings %}
+                    <span class="close">&times;</span>
+                    {% endif %}
+                </div>
             </div>
             <div class="modal-body">
                 <form id="settings-form">
@@ -131,6 +134,6 @@
         </div>
     </div>
 
-    <script src="/static/script.js"></script>
+    <script src="/static/script.js?v={{ static_version }}"></script>
 </body>
 </html>

@@ -13,6 +13,8 @@ class StashShrinkApp {
         this.queuedSceneIds = new Set();
         this.isQueuePaused = true; // Runtime-only state, default to paused
         this.totalPages = 1;
+        this.updateStatus = null;
+        this.lastUpdatePromptedVersion = null;
 
         // Store section references
         this.searchSection = document.querySelector('.search-section');
@@ -71,17 +73,7 @@ class StashShrinkApp {
         try {
             const response = await fetch('/api/conversion-status');
             const statusData = await response.json();
-
-            // Load pause state
-            this.isQueuePaused = statusData.paused !== undefined ? statusData.paused : true;
-
-            // Store the initial conversion status
-            this.lastConversionStatus = statusData;
-            this.updateQueuedSceneIds(statusData.queue);
-            this.updateConversionUI(statusData.queue);
-
-            // Track queued scene IDs
-            this.updateQueuedSceneIds(statusData.queue);
+            this.updateConversionStatus(statusData);
 
             const hasQueueItems = statusData.queue && statusData.queue.length > 0;
 
@@ -219,6 +211,26 @@ class StashShrinkApp {
             document.querySelector('#settings-modal .close').addEventListener('click', () => this.hideSettingsModal());
         }
 
+        const checkUpdatesBtn = document.getElementById('check-updates-btn');
+        if (checkUpdatesBtn) {
+            checkUpdatesBtn.addEventListener('click', () => this.manualUpdateCheck());
+        }
+
+        // Update modal
+        this.updateModal = document.getElementById('update-modal');
+        const updateClose = document.querySelector('#update-modal .close');
+        if (updateClose) {
+            updateClose.addEventListener('click', () => this.hideUpdateModal());
+        }
+        const closeUpdateBtn = document.getElementById('close-update-btn');
+        if (closeUpdateBtn) {
+            closeUpdateBtn.addEventListener('click', () => this.hideUpdateModal());
+        }
+        const applyUpdateBtn = document.getElementById('apply-update-btn');
+        if (applyUpdateBtn) {
+            applyUpdateBtn.addEventListener('click', () => this.applyUpdate());
+        }
+
         // Settings form
         document.getElementById('settings-form').addEventListener('submit', (e) => {
             e.preventDefault();
@@ -316,6 +328,7 @@ class StashShrinkApp {
                 if (e.target.classList.contains('modal')) {
                     this.hideSettingsModal();
                     this.hideLogModal();
+                    this.hideUpdateModal();
                 }
             });
         }
@@ -467,6 +480,175 @@ class StashShrinkApp {
         document.body.style.height = '';
         document.body.style.top = '';
         document.body.style.left = '';
+    }
+
+    showUpdateModal() {
+        if (!this.updateModal) return;
+        this.updateModal.style.display = 'block';
+        document.body.style.overflow = 'hidden';
+    }
+
+    hideUpdateModal() {
+        if (!this.updateModal) return;
+        this.updateModal.style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    populateUpdateModal(updateInfo) {
+        if (!updateInfo) return;
+        const currentEl = document.getElementById('current-version');
+        const latestEl = document.getElementById('latest-version');
+        const commitList = document.getElementById('update-commits');
+
+        if (currentEl) currentEl.textContent = updateInfo.current_version || 'Unknown';
+        if (latestEl) latestEl.textContent = updateInfo.latest_version || updateInfo.latest_tag || 'Unknown';
+
+        if (commitList) {
+            commitList.innerHTML = '';
+            const commits = updateInfo.commits || [];
+            if (commits.length === 0) {
+                const li = document.createElement('li');
+                li.textContent = 'No commit details available';
+                commitList.appendChild(li);
+            } else {
+                commits.forEach(commit => {
+                    const li = document.createElement('li');
+                    li.textContent = commit;
+                    commitList.appendChild(li);
+                });
+            }
+        }
+
+        this.setUpdateStatusText(updateInfo.error ? `Last check failed: ${updateInfo.error}` : '', !!updateInfo.error);
+    }
+
+    setUpdateStatusText(message, isError = false) {
+        const statusEl = document.getElementById('update-status-text');
+        if (!statusEl) return;
+
+        statusEl.textContent = message || '';
+        statusEl.style.color = isError ? 'var(--danger-color)' : 'var(--secondary-color)';
+    }
+
+    handleUpdateStatus(updateInfo) {
+        if (!updateInfo) return;
+        this.updateStatus = updateInfo;
+
+        if (updateInfo.updating) {
+            this.populateUpdateModal(updateInfo);
+            this.setUpdateStatusText('Updating application and restarting. Please wait...', false);
+            this.showUpdateModal();
+            return;
+        }
+
+        const latestVersion = updateInfo.latest_version || updateInfo.latest_tag;
+        const shouldPrompt =
+            updateInfo.update_available &&
+            this.isQueuePaused &&
+            latestVersion &&
+            this.lastUpdatePromptedVersion !== latestVersion;
+
+        if (shouldPrompt) {
+            this.lastUpdatePromptedVersion = latestVersion;
+            this.populateUpdateModal(updateInfo);
+            this.showUpdateModal();
+        }
+    }
+
+    async manualUpdateCheck() {
+        this.setUpdateButtonsDisabled(true);
+        this.setUpdateStatusText('Checking for updates...', false);
+
+        try {
+            const response = await fetch('/api/update/check', { method: 'POST' });
+
+            if (!response.ok) {
+                const errorMessage = await this.extractErrorMessage(response);
+                throw new Error(errorMessage || 'Failed to check for updates');
+            }
+
+            const data = await response.json();
+            this.updateStatus = data;
+
+            const latestVersion = data.latest_version || data.latest_tag;
+            if (latestVersion) {
+                this.lastUpdatePromptedVersion = latestVersion;
+            }
+
+            this.populateUpdateModal(data);
+
+            const hasUpdate = data.update_available;
+            const statusMessage = hasUpdate
+                ? 'Update available. Review the changes below and apply when ready.'
+                : 'Already on the latest version.';
+
+            this.setUpdateStatusText(statusMessage, false);
+
+            if (!hasUpdate) {
+                this.showToast('Already on the latest version.', 'info', 4000);
+            }
+
+            this.showUpdateModal();
+        } catch (error) {
+            console.error('Failed to check for updates:', error);
+            this.showToast('Failed to check for updates: ' + error.message, 'error');
+            this.setUpdateStatusText('Failed to check for updates. Please try again.', true);
+        } finally {
+            const keepDisabled = this.updateStatus && this.updateStatus.updating;
+            if (!keepDisabled) {
+                this.setUpdateButtonsDisabled(false);
+            }
+        }
+    }
+
+    setUpdateButtonsDisabled(disabled) {
+        const applyButton = document.getElementById('apply-update-btn');
+        const closeButton = document.getElementById('close-update-btn');
+        if (applyButton) applyButton.disabled = disabled;
+        if (closeButton) closeButton.disabled = disabled;
+    }
+
+    async applyUpdate() {
+        this.setUpdateButtonsDisabled(true);
+        this.setUpdateStatusText('Applying update...', false);
+
+        try {
+            const response = await fetch('/api/update/apply', { method: 'POST' });
+
+            if (!response.ok) {
+                const errorMessage = await this.extractErrorMessage(response);
+                throw new Error(errorMessage || 'Failed to apply update');
+            }
+
+            const data = await response.json();
+
+            if (!this.updateStatus) this.updateStatus = {};
+            this.updateStatus.updating = data.status === 'updating';
+
+            if (data.status === 'updating') {
+                this.setUpdateStatusText('Update applied. The application will restart shortly.', false);
+                this.showToast('Updating application and restarting...', 'info', 7000);
+            } else if (data.status === 'up_to_date') {
+                this.setUpdateStatusText('Already on the latest version.', false);
+                this.showToast('Already up to date.', 'info', 4000);
+                this.hideUpdateModal();
+            } else if (data.status === 'in_progress') {
+                this.setUpdateStatusText('Update already in progress.', false);
+            } else {
+                this.setUpdateStatusText(data.message || 'Update response received.', false);
+            }
+        } catch (error) {
+            console.error('Failed to apply update:', error);
+            this.showToast('Failed to apply update: ' + error.message, 'error');
+            this.setUpdateStatusText('Failed to apply update. Please try again.', true);
+            this.setUpdateButtonsDisabled(false);
+            return;
+        }
+
+        const keepDisabled = this.updateStatus && this.updateStatus.updating;
+        if (!keepDisabled) {
+            this.setUpdateButtonsDisabled(false);
+        }
     }
 
     populateSettingsForm() {
@@ -1374,6 +1556,10 @@ class StashShrinkApp {
             this.updateQueuedSceneIds(statusData.queue);
             this.updateProgressOverview(statusData.queue, statusData.active);
             this.updateConversionUI(statusData.queue);
+        }
+
+        if (statusData && statusData.update) {
+            this.handleUpdateStatus(statusData.update);
         }
     }
 

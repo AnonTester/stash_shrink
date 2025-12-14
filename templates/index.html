@@ -193,6 +193,38 @@
     </div>
 </div>
 
+<!-- Update Modal -->
+<div id="update-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Update Available</h2>
+            <span class="close">&times;</span>
+        </div>
+        <div class="modal-body">
+            <p class="modal-subtitle">A new version of Stash Shrink is available.</p>
+            <div class="version-row">
+                <div class="version-card">
+                    <div class="version-label">Current</div>
+                    <div id="current-version" class="version-value">-</div>
+                </div>
+                <div class="version-card">
+                    <div class="version-label">Available</div>
+                    <div id="latest-version" class="version-value">-</div>
+                </div>
+            </div>
+            <div class="commit-list-wrapper">
+                <h3>Changes since your version</h3>
+                <ul id="update-commits" class="commit-list"></ul>
+            </div>
+            <div id="update-status-text" class="update-status-text"></div>
+        </div>
+        <div class="modal-footer">
+            <button id="apply-update-btn" class="btn btn-primary">Update &amp; Restart</button>
+            <button id="close-update-btn" class="btn btn-secondary">Close</button>
+        </div>
+    </div>
+</div>
+
 <script>
     // Show settings modal on first run
     document.addEventListener('DOMContentLoaded', function() {

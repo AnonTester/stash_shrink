@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 from contextlib import asynccontextmanager
 import asyncio
@@ -25,7 +26,36 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.2.0"
+VERSION = "2.3.0"
+
+
+def compute_cache_buster() -> str:
+    env_value = os.environ.get("STATIC_CACHE_BUSTER")
+    if env_value:
+        return env_value
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        git_ref = result.stdout.strip()
+        if git_ref:
+            return git_ref
+    except Exception:
+        pass
+
+    return str(int(time.time()))
+
+
+STATIC_CACHE_BUSTER = compute_cache_buster()
+
+# Update configuration
+GITHUB_REPO = "AnonTester/stash_shrink"
+GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}"
+UPDATE_CHECK_INTERVAL = 24 * 60 * 60  # Once per day
 
 # Configuration
 CONFIG_FILE = "config.json"
@@ -59,6 +89,18 @@ active_tasks = set()
 QUEUE_STATE_FILE = "conversion_queue.json"
 task_status = {}
 sse_clients = set()
+
+# Update status tracking
+update_status = {
+    "current_version": VERSION,
+    "latest_version": VERSION,
+    "latest_tag": f"v{VERSION}",
+    "update_available": False,
+    "commits": [],
+    "last_checked": None,
+    "error": None,
+    "updating": False
+}
 
 # Thread pool for FFmpeg processes
 ffmpeg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
@@ -337,6 +379,133 @@ def initialize_queue_system():
     """Initialize the queue system - called once on app startup"""
     load_queue_state()
     logger.info(f"Queue system initialized with {len(conversion_queue)} tasks")
+
+
+def normalize_tag(version: str) -> str:
+    return version if version.startswith("v") else f"v{version}"
+
+
+def version_tuple(version: str) -> tuple:
+    try:
+        return tuple(int(part) for part in version.strip().lstrip("v").split("."))
+    except ValueError:
+        return (0,)
+
+
+def is_newer_version(latest: str, current: str) -> bool:
+    return version_tuple(latest) > version_tuple(current)
+
+
+async def fetch_commits_between_versions(client: httpx.AsyncClient, current_version: str, latest_tag: str) -> List[str]:
+    try:
+        compare_url = f"{GITHUB_API_BASE}/compare/{normalize_tag(current_version)}...{latest_tag}"
+        response = await client.get(compare_url, headers={"Accept": "application/vnd.github+json"})
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        data = response.json()
+        return [commit.get("commit", {}).get("message", "").split("\n")[0] for commit in data.get("commits", [])]
+    except Exception as e:
+        logger.warning(f"Failed to fetch commit history: {e}")
+        return []
+
+
+async def check_for_updates(force: bool = False) -> Dict[str, Any]:
+    global update_status
+    now = time.time()
+
+    if (
+        not force
+        and update_status.get("last_checked")
+        and now - update_status["last_checked"] < UPDATE_CHECK_INTERVAL
+    ):
+        return update_status
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            release_response = await client.get(
+                f"{GITHUB_API_BASE}/releases/latest",
+                headers={"Accept": "application/vnd.github+json"},
+            )
+
+            release_response.raise_for_status()
+            release_data = release_response.json()
+            latest_tag = release_data.get("tag_name") or normalize_tag(VERSION)
+            latest_version = latest_tag.lstrip("v")
+
+            update_available = is_newer_version(latest_version, VERSION)
+            commits = []
+            if update_available:
+                commits = await fetch_commits_between_versions(client, VERSION, latest_tag)
+
+            update_status = {
+                "current_version": VERSION,
+                "latest_version": latest_version,
+                "latest_tag": latest_tag,
+                "update_available": update_available,
+                "commits": commits,
+                "last_checked": now,
+                "error": None,
+                "updating": update_status.get("updating", False),
+            }
+            logger.info(
+                f"Update check complete - current: {VERSION}, latest: {latest_version}, "
+                f"available: {update_available}"
+            )
+            clear_sse_cache()
+    except Exception as e:
+        logger.warning(f"Update check failed: {e}")
+        update_status = {
+            "current_version": VERSION,
+            "latest_version": VERSION,
+            "latest_tag": normalize_tag(VERSION),
+            "update_available": False,
+            "commits": [],
+            "last_checked": now,
+            "error": str(e),
+            "updating": False,
+        }
+        clear_sse_cache()
+
+    return update_status
+
+
+def perform_git_update(target_ref: str):
+    repo_path = Path(__file__).resolve().parent
+    commands = [
+        ["git", "fetch", "origin", "--tags"],
+        ["git", "checkout", target_ref],
+        ["git", "reset", "--hard", target_ref],
+    ]
+
+    for cmd in commands:
+        result = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Command {' '.join(cmd)} failed: {result.stderr or result.stdout}"
+            )
+
+
+async def apply_self_update(target_ref: str):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, perform_git_update, target_ref)
+
+
+async def restart_application(delay_seconds: int = 1):
+    await asyncio.sleep(delay_seconds)
+    logger.info("Restarting application after update")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+async def periodic_update_checks():
+    while True:
+        try:
+            await check_for_updates()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Error during periodic update check: {e}")
+        await asyncio.sleep(UPDATE_CHECK_INTERVAL)
 
 def apply_path_mappings(file_path: str, path_mappings: List[str]) -> str:
     """
@@ -798,6 +967,10 @@ async def lifespan(app: FastAPI):
     global queue_paused
     queue_paused = True
 
+    # Check for updates on startup and schedule daily checks
+    await check_for_updates(force=True)
+    update_checker_task = asyncio.create_task(periodic_update_checks())
+
     # Start SSE update processor
     sse_processor_task = asyncio.create_task(process_sse_update_queue())
 
@@ -809,6 +982,13 @@ async def lifespan(app: FastAPI):
     sse_processor_task.cancel()
     try:
         await sse_processor_task
+    except asyncio.CancelledError:
+        pass
+
+    # Cancel update checker
+    update_checker_task.cancel()
+    try:
+        await update_checker_task
     except asyncio.CancelledError:
         pass
 
@@ -842,13 +1022,50 @@ async def read_root(request: Request):
         "request": request,
         "config": config,
         "show_settings": show_settings,
-        "version": VERSION
+        "version": VERSION,
+        "static_version": STATIC_CACHE_BUSTER
     })
 
 @app.get("/api/config")
 async def get_config_api():
     config = get_config()
     return config
+
+
+@app.get("/api/update-status")
+async def get_update_status():
+    await check_for_updates()
+    return update_status
+
+
+@app.post("/api/update/check")
+async def force_update_check():
+    return await check_for_updates(force=True)
+
+
+@app.post("/api/update/apply")
+async def apply_update():
+    global update_status
+    latest_info = await check_for_updates(force=True)
+
+    if latest_info.get("updating"):
+        return {"status": "in_progress", "message": "Update already in progress"}
+
+    if not latest_info.get("update_available"):
+        return {"status": "up_to_date", "message": "Already on the latest version"}
+
+    try:
+        update_status["updating"] = True
+        clear_sse_cache()
+        await apply_self_update(latest_info.get("latest_tag", normalize_tag(VERSION)))
+        asyncio.create_task(restart_application())
+        return {"status": "updating", "message": "Update applied. Restarting application."}
+    except Exception as e:
+        update_status["updating"] = False
+        update_status["error"] = str(e)
+        clear_sse_cache()
+        logger.error(f"Failed to apply update: {e}")
+        raise HTTPException(status_code=500, detail=f"Update failed: {str(e)}")
 
 @app.post("/api/config")
 async def update_config(settings: Settings):
@@ -1320,13 +1537,13 @@ async def fix_stash_update(task: ConversionTask):
 @app.get("/api/conversion-status")
 async def conversion_status():
     global queue_paused
-    config = get_config()
 
     return {
         "queue": [task.dict() for task in conversion_queue],
         "active": list(active_tasks),
         "completed": [task.dict() for task in conversion_queue if task.status in ["completed", "error"]],
-        "paused": config.get('paused', True)
+        "paused": queue_paused,
+        "update": update_status,
     }
 
 @app.post("/api/cancel-conversion/{task_id}")
@@ -1873,7 +2090,8 @@ async def sse_endpoint(request: Request):
                 status_data = {
                     "queue": serializable_queue,
                     "active": list(active_tasks),
-                    "paused": queue_paused
+                    "paused": queue_paused,
+                    "update": update_status,
                 }
 
                 if last_sse_data != status_data:

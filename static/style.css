@@ -833,6 +833,23 @@ input, select {
     align-items: center;
 }
 
+.modal-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.modal-subtext {
+    font-size: 0.875rem;
+    color: var(--secondary-color);
+}
+
+.modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .modal-content {
     background-color: var(--bg-color);
     margin: 2.5% auto;
@@ -861,6 +878,63 @@ input, select {
 
 .modal.first-run .close {
     display: none;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 1rem 1.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.modal-subtitle {
+    margin-top: 0;
+    color: var(--secondary-color);
+}
+
+.version-row {
+    display: flex;
+    gap: 1rem;
+    margin: 1rem 0;
+}
+
+.version-card {
+    flex: 1;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    background: var(--header-bg);
+}
+
+.version-label {
+    font-size: 0.875rem;
+    color: var(--secondary-color);
+    margin-bottom: 0.35rem;
+}
+
+.version-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.commit-list-wrapper h3 {
+    margin-bottom: 0.5rem;
+}
+
+.commit-list {
+    list-style: disc;
+    padding-left: 1.5rem;
+    margin: 0;
+}
+
+.commit-list li {
+    margin-bottom: 0.35rem;
+}
+
+.update-status-text {
+    margin-top: 0.75rem;
+    color: var(--secondary-color);
 }
 
 /* Disabled state for first run */
