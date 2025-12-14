@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.0.3"
+VERSION = "2.0.4"
 
 # Configuration
 CONFIG_FILE = "config.json"
@@ -629,14 +629,23 @@ async def convert_video_threaded(task: ConversionTask):
             if not os.path.exists(temp_output) and not os.path.exists(final_output):
                 raise Exception(f"Output file was not created: {temp_output} or {final_output}")
 
-            # If temp file exists but final doesn't, rename it
-            if os.path.exists(temp_output) and not os.path.exists(final_output):
+            # If temp file exists, move it into place as the final output
+            if os.path.exists(temp_output):
                 output_size = os.path.getsize(temp_output)
                 if output_size == 0:
                     raise Exception(f"Output file is empty: {temp_output}")
 
-                logger.debug(f"[Task {task.task_id}] Renaming temp file to final: {temp_output} -> {final_output}")
-                os.rename(temp_output, final_output)
+                logger.debug(f"[Task {task.task_id}] Preparing to finalize output: {temp_output} -> {final_output}")
+
+                # For overwrite + same-extension conversions, replace the original file
+                # so that Stash sees the new content under the original path.
+                if overwrite_original and original_extension == new_extension:
+                    os.replace(temp_output, final_output)
+                else:
+                    # In other cases, keep the generated filename (which was already checked
+                    # for availability) but still allow replacement if something unexpected
+                    # created the target while we were converting.
+                    os.replace(temp_output, final_output)
 
             # Verify final output
             if not os.path.exists(final_output):
