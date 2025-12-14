@@ -126,6 +126,7 @@ class ConversionTask(BaseModel):
     status: str = "pending"  # pending, processing, completed, completed_with_warning, error, cancelled
     progress: float = 0.0
     eta: Optional[float] = None
+    speed: Optional[float] = None
     log_file: str
     output_file: Optional[str] = None
     error: Optional[str] = None
@@ -140,6 +141,7 @@ class FFmpegProgress:
         self.task_id = task_id or "unknown"
         self.line_count = 0
         self.parsed_count = 0
+        self.speed = None
 
     def parse_line(self, line: str):
         """Parse FFmpeg output line to extract progress information"""
@@ -225,6 +227,17 @@ class FFmpegProgress:
                 except (ValueError, IndexError) as e:
                     logger.debug(f"[Task {self.task_id}] Failed to parse frame: {e}")
 
+        # Parse speed if present
+        speed_match = re.search(r'speed=\s*([\d\.]+)x', line)
+        if speed_match:
+            try:
+                new_speed = float(speed_match.group(1))
+                if self.speed is None or abs(new_speed - self.speed) > 0.01:
+                    self.speed = new_speed
+                    updated = True
+            except ValueError:
+                pass
+
         return updated
 
     def parse_time_string(self, time_str: str) -> float:
@@ -275,6 +288,7 @@ def save_queue_state():
                 "status": task.status,
                 "progress": task.progress,
                 "eta": task.eta,
+                "speed": task.speed,
                 "log_file": task.log_file,
                 "output_file": task.output_file,
                 "error": task.error
@@ -308,6 +322,7 @@ def load_queue_state():
                     status=task_data["status"],
                     progress=task_data["progress"],
                     eta=task_data["eta"],
+                    speed=task_data.get("speed"),
                     log_file=task_data["log_file"],
                     output_file=task_data["output_file"],
                     error=task_data["error"]
@@ -474,6 +489,7 @@ def run_ffmpeg_with_progress(task, ffmpeg_cmd, temp_output, file_duration, start
         # Parse progress
         if progress_tracker.parse_line(line):
             task.progress = progress_tracker.progress
+            task.speed = progress_tracker.speed
 
             # Calculate ETA
             if task.progress > 0:
@@ -1846,6 +1862,7 @@ async def sse_endpoint(request: Request):
                         "status": task.status,
                         "progress": task.progress,
                         "eta": task.eta,
+                        "speed": task.speed,
                         "output_file": task.output_file,
                         "error": task.error
                     }

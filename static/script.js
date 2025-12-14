@@ -1570,20 +1570,50 @@ class StashShrinkApp {
             ${progress.toFixed(1)}% Complete (${completed}/${total} files, ${remaining} remaining)
         `;
 
-        const hasProcessingTasks = queue.some(task => task.status === 'processing');
-        if (hasProcessingTasks) {
-            const activeProcessingTasks = queue.filter(task => task.status === 'processing' && task.eta);
-            if (activeProcessingTasks.length > 0) {
-                // Use the maximum ETA among active tasks
-                const maxEta = Math.max(...activeProcessingTasks.map(task => task.eta || 0));
-                const etaElement = document.getElementById('eta-text');
-                etaElement.textContent = `ETA: ${this.formatTime(maxEta)}`;
-                etaElement.style.display = 'block';
-            } else {
-                const etaElement = document.getElementById('eta-text');
-                etaElement.textContent = 'ETA: Calculating...';
-                etaElement.style.display = 'block';
-            }
+        const hasPendingOrProcessing = queue.some(task => task.status === 'processing' || task.status === 'pending');
+
+        if (hasPendingOrProcessing) {
+            const etaElement = document.getElementById('eta-text');
+            const getTaskDuration = (task) => {
+                const file = task?.scene?.files?.[0];
+                return file?.duration || 0;
+            };
+
+            const activeProcessingTasks = queue.filter(task => task.status === 'processing');
+            const currentTaskEta = activeProcessingTasks.length > 0
+                ? Math.max(...activeProcessingTasks.map(task => task.eta || 0))
+                : null;
+
+            const totalRemainingDuration = queue.reduce((sum, task) => {
+                if (task.status !== 'processing' && task.status !== 'pending') return sum;
+                const duration = getTaskDuration(task);
+                if (!duration) return sum;
+
+                if (task.status === 'processing') {
+                    const progress = task.progress || 0;
+                    const processed = (progress / 100) * duration;
+                    return sum + Math.max(duration - processed, 0);
+                }
+
+                return sum + duration;
+            }, 0);
+
+            const totalSpeed = activeProcessingTasks.reduce((sum, task) => {
+                if (task.speed && task.speed > 0) {
+                    return sum + task.speed;
+                }
+                return sum;
+            }, 0);
+
+            const totalEtaSeconds = totalRemainingDuration > 0 && totalSpeed > 0
+                ? totalRemainingDuration / totalSpeed
+                : null;
+
+            const totalEtaText = totalEtaSeconds !== null ? this.formatTime(totalEtaSeconds) : 'Calculating...';
+            const currentEtaText = currentTaskEta !== null ? this.formatTime(currentTaskEta) : null;
+
+            etaElement.innerHTML = `<strong>Total ETA:</strong> ${totalEtaText}${currentEtaText ? ` (ETA of current tasks: ${currentEtaText})` : ''}`;
+            etaElement.style.display = 'block';
         } else {
             document.getElementById('eta-text').style.display = 'none';
         }
