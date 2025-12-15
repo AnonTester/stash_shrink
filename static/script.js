@@ -275,6 +275,8 @@ class StashShrinkApp {
         document.getElementById('convert-videos').addEventListener('click', () => this.queueConversion());
         document.getElementById('cancel-all').addEventListener('click', () => this.cancelAllConversions());
         document.getElementById('clear-completed').addEventListener('click', () => this.clearCompleted());
+        document.getElementById('clear-errors').addEventListener('click', () => this.clearErrors());
+        document.getElementById('retry-all-errors').addEventListener('click', () => this.retryAllErrors());
         document.getElementById('toggle-pause').addEventListener('click', () => this.toggleQueuePause());
         document.getElementById('remove-all-pending').addEventListener('click', () => this.removeAllPending());
 
@@ -1558,11 +1560,12 @@ class StashShrinkApp {
 
         // Only update if we have valid data
         if (statusData && statusData.queue !== undefined) {
+            const orderedQueue = this.orderQueue(statusData.queue);
             this.isQueuePaused = statusData.paused !== undefined ? statusData.paused : true;
-            this.renderConversionTable(statusData.queue);
-            this.updateQueuedSceneIds(statusData.queue);
-            this.updateProgressOverview(statusData.queue, statusData.active);
-            this.updateConversionUI(statusData.queue);
+            this.renderConversionTable(orderedQueue);
+            this.updateQueuedSceneIds(orderedQueue);
+            this.updateProgressOverview(orderedQueue, statusData.active);
+            this.updateConversionUI(orderedQueue);
         }
 
         if (statusData && statusData.update) {
@@ -1570,11 +1573,38 @@ class StashShrinkApp {
         }
     }
 
+    orderQueue(queue) {
+        if (!queue) return [];
+
+        const statusPriority = {
+            'processing': 0,
+            'error': 1,
+            'pending': 2,
+            'cancelled': 3,
+            'completed_with_warning': 4,
+            'completed': 5,
+        };
+
+        return [...queue]
+            .map((task, index) => ({ task, index }))
+            .sort((a, b) => {
+                const priorityA = statusPriority[a.task.status] ?? 3;
+                const priorityB = statusPriority[b.task.status] ?? 3;
+
+                if (priorityA !== priorityB) {
+                    return priorityA - priorityB;
+                }
+
+                return a.index - b.index;
+            })
+            .map(({ task }) => task);
+    }
+
     updateButtonStates(queue) {
         const hasActiveOrPending = queue.some(task =>
             task.status === 'processing' || task.status === 'pending'
         );
-        const hasCompleted = queue.some(task => task.status === 'completed');
+        const hasCompleted = queue.some(task => task.status === 'completed' || task.status === 'completed_with_warning');
         const hasErrors = queue.some(task => task.status === 'error');
         const hasProcessing = queue.some(task => task.status === 'processing');
         const hasPending = queue.some(task => task.status === 'pending');
@@ -1588,7 +1618,19 @@ class StashShrinkApp {
         // Update Clear Completed button
         const clearCompletedBtn = document.getElementById('clear-completed');
         if (clearCompletedBtn) {
-            clearCompletedBtn.style.display = (hasCompleted || hasErrors) ? 'inline-block' : 'none';
+            clearCompletedBtn.style.display = hasCompleted ? 'inline-block' : 'none';
+        }
+
+        // Update Clear Errors button
+        const clearErrorsBtn = document.getElementById('clear-errors');
+        if (clearErrorsBtn) {
+            clearErrorsBtn.style.display = hasErrors ? 'inline-block' : 'none';
+        }
+
+        // Update Retry All Errors button
+        const retryAllErrorsBtn = document.getElementById('retry-all-errors');
+        if (retryAllErrorsBtn) {
+            retryAllErrorsBtn.style.display = hasErrors ? 'inline-block' : 'none';
         }
 
         // Update Remove All Pending button
@@ -1657,7 +1699,7 @@ class StashShrinkApp {
         try {
             const response = await fetch('/api/clear-completed', { method: 'POST' });
             if (response.ok) {
-                this.showToast('Cleared completed and errored tasks', 'success');
+                this.showToast('Cleared completed tasks', 'success');
                 await this.fetchAndUpdateConversionStatus();
             } else {
                 const errorData = await response.json().catch(() => ({}));
@@ -1666,6 +1708,39 @@ class StashShrinkApp {
         } catch (error) {
             console.error('Failed to clear completed tasks:', error);
             this.showToast('Failed to clear completed tasks: ' + error.message, 'error');
+        }
+    }
+
+    async clearErrors() {
+        try {
+            const response = await fetch('/api/clear-errors', { method: 'POST' });
+            if (response.ok) {
+                this.showToast('Cleared errored tasks', 'success');
+                await this.fetchAndUpdateConversionStatus();
+            } else {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || 'Failed to clear errored tasks');
+            }
+        } catch (error) {
+            console.error('Failed to clear errored tasks:', error);
+            this.showToast('Failed to clear errored tasks: ' + error.message, 'error');
+        }
+    }
+
+    async retryAllErrors() {
+        try {
+            const response = await fetch('/api/retry-all-errors', { method: 'POST' });
+            if (response.ok) {
+                const data = await response.json();
+                this.showToast(`Retrying ${data.count || 0} errored task${(data.count || 0) === 1 ? '' : 's'}`, 'info');
+                await this.fetchAndUpdateConversionStatus();
+            } else {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || 'Failed to retry errored tasks');
+            }
+        } catch (error) {
+            console.error('Failed to retry errored tasks:', error);
+            this.showToast('Failed to retry errored tasks: ' + error.message, 'error');
         }
     }
 

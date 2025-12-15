@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 
 
 def compute_cache_buster() -> str:
@@ -1664,7 +1664,10 @@ async def cancel_conversion(task_id: str):
 @app.post("/api/clear-completed")
 async def clear_completed():
     global conversion_queue
-    tasks_to_keep = [task for task in conversion_queue if task.status in ["pending", "processing", "cancelled"]]
+    tasks_to_keep = [
+        task for task in conversion_queue
+        if task.status not in ["completed", "completed_with_warning"]
+    ]
     tasks_removed = len(conversion_queue) - len(tasks_to_keep)
 
     # Clean up temporary files for cancelled tasks being removed
@@ -1679,8 +1682,20 @@ async def clear_completed():
 
     conversion_queue = tasks_to_keep
     save_queue_state()
-    logger.info(f"Cleared {tasks_removed} completed/error tasks from queue")
+    logger.info(f"Cleared {tasks_removed} completed tasks from queue")
     return {"status": "cleared"}
+
+
+@app.post("/api/clear-errors")
+async def clear_errors():
+    global conversion_queue
+    tasks_to_keep = [task for task in conversion_queue if task.status != "error"]
+    tasks_removed = len(conversion_queue) - len(tasks_to_keep)
+
+    conversion_queue = tasks_to_keep
+    save_queue_state()
+    logger.info(f"Cleared {tasks_removed} errored tasks from queue")
+    return {"status": "cleared", "count": tasks_removed}
 
 @app.post("/api/cancel-all-conversions")
 async def cancel_all_conversions():
@@ -1811,6 +1826,40 @@ async def retry_conversion(task_id: str):
     except Exception as e:
         logger.error(f"Failed to retry conversion task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retry conversion: {str(e)}")
+
+
+@app.post("/api/retry-all-errors")
+async def retry_all_errors():
+    """Reset all errored tasks to pending for retry"""
+    global conversion_queue, queue_paused
+
+    try:
+        retry_count = 0
+        for task in conversion_queue:
+            if task.status == "error":
+                task.status = "pending"
+                task.progress = 0.0
+                task.eta = None
+                task.error = None
+                retry_count += 1
+
+        if retry_count == 0:
+            return {"status": "no_errors"}
+
+        save_queue_state()
+        clear_sse_cache()
+
+        logger.info(f"Retrying {retry_count} errored tasks")
+
+        if not queue_paused:
+            asyncio.create_task(process_conversion_queue())
+        else:
+            logger.info("Queue is paused, retried tasks will remain pending until started")
+
+        return {"status": "retried", "count": retry_count}
+    except Exception as e:
+        logger.error(f"Failed to retry errored tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retry errored tasks: {str(e)}")
 
 @app.post("/api/retry-stash-fix/{task_id}")
 async def retry_stash_fix(task_id: str):
