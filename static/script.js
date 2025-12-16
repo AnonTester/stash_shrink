@@ -1749,13 +1749,26 @@ class StashShrinkApp {
         const tableContainer = document.querySelector('.conversion-section .table-container');
         const isMobile = window.matchMedia('(max-width: 768px)').matches;
         tbody.innerHTML = '';
-        const statusDisplayText = {
-            'pending': 'pending',
-            'processing': 'processing',
-            'completed': 'completed',
-            'completed_with_warning': 'warning',
-            'error': 'error',
-            'cancelled': 'cancelled'
+        const statusDisplay = {
+            'pending': { text: 'pending', icon: '&#9203;' },
+            'processing': { text: 'processing', icon: '&#9201;' },
+            'completed': { text: 'completed', icon: '&#9989;' },
+            'completed_with_warning': { text: 'warning', icon: '&#9888;' },
+            'error': { text: 'error', icon: '&#10060;' },
+            'cancelled': { text: 'cancelled', icon: '&#128683;' }
+        };
+
+        const getStatusContent = (status) => {
+            const display = statusDisplay[status] || { text: status, icon: '&#8505;' };
+
+            if (isMobile) {
+                return `
+                    <span class="status-icon" aria-label="${display.text}" title="${display.text}">${display.icon}</span>
+                    <span class="sr-only">${display.text}</span>
+                `;
+            }
+
+            return display.text;
         };
 
         if (!queue || queue.length === 0) {
@@ -1834,7 +1847,7 @@ class StashShrinkApp {
                 `;
 
                 secondaryRow.innerHTML = `
-                    <td class="conversion-status status-${task.status}" ${hasErrorDetail ? `title="${task.error}"` : ''}>${statusDisplayText[task.status] || task.status}</td>
+                    <td class="conversion-status status-${task.status}" ${hasErrorDetail ? `title="${task.error}"` : ''}>${getStatusContent(task.status)}</td>
                     <td class="conversion-progress" colspan="2">
                         ${progressDisplay}
                     </td>
@@ -1880,7 +1893,7 @@ class StashShrinkApp {
                         <a class="title-link" href="${stashSceneUrl}" target="_blank" rel="noopener noreferrer">${sceneTitle}</a>
                         <div class="conversion-filepath" title="${filePath}">${this.truncatePath(filePath, 80)}</div>
                     </td>
-                    <td class="conversion-status status-${task.status}" ${hasErrorDetail ? `title="${task.error}"` : ''}>${statusDisplayText[task.status] || task.status}</td>
+                    <td class="conversion-status status-${task.status}" ${hasErrorDetail ? `title="${task.error}"` : ''}>${getStatusContent(task.status)}</td>
                     <td class="conversion-progress">
                         ${progressDisplay}
                     </td>
