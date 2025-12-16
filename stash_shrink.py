@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 
 
 def compute_cache_buster() -> str:
@@ -89,6 +89,7 @@ active_tasks = set()
 QUEUE_STATE_FILE = "conversion_queue.json"
 task_status = {}
 sse_clients = set()
+sse_shutdown_event = asyncio.Event()
 
 # Update status tracking
 update_status = {
@@ -682,7 +683,9 @@ def run_ffmpeg_with_progress(task, ffmpeg_cmd, temp_output, file_duration, start
         stdin=subprocess.PIPE,
         bufsize=1,  # Line buffered
         universal_newlines=True,
-        text=True
+        text=True,
+        encoding='utf-8',
+        errors='replace'
     )
 
     # Read output line by line
@@ -1013,6 +1016,8 @@ async def process_sse_update_queue():
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up Stash Shrink")
+    global sse_shutdown_event
+    sse_shutdown_event = asyncio.Event()
     initialize_queue_system()
     # Queue starts paused by default
     global queue_paused
@@ -1029,12 +1034,19 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down Stash Shrink")
+    sse_shutdown_event.set()
     # Cancel the SSE processor task
     sse_processor_task.cancel()
     try:
         await sse_processor_task
     except asyncio.CancelledError:
         pass
+
+    # Give SSE clients a grace period to disconnect
+    try:
+        await asyncio.wait_for(wait_for_sse_disconnect(), timeout=5)
+    except asyncio.TimeoutError:
+        logger.warning("Forcing shutdown with active SSE connections")
 
     # Cancel update checker
     update_checker_task.cancel()
@@ -1060,6 +1072,11 @@ templates = Jinja2Templates(directory="templates")
 
 # Runtime queue state (not persisted)
 queue_paused = True
+
+
+async def wait_for_sse_disconnect():
+    while sse_clients:
+        await asyncio.sleep(0.1)
 
 def clear_sse_cache():
     global last_sse_data
@@ -2167,7 +2184,7 @@ async def sse_endpoint(request: Request):
 
         try:
             while True:
-                if await request.is_disconnected():
+                if sse_shutdown_event.is_set() or await request.is_disconnected():
                     break
 
                 serializable_queue = []
