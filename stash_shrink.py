@@ -1,11 +1,12 @@
 import os
 import sys
 import json
+import copy
 from contextlib import asynccontextmanager
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import uuid
 import subprocess
 import re
@@ -26,26 +27,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.4.2"
+VERSION = "2.5.0"
 
 
 def compute_cache_buster() -> str:
     env_value = os.environ.get("STATIC_CACHE_BUSTER")
     if env_value:
         return env_value
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        git_ref = result.stdout.strip()
-        if git_ref:
-            return git_ref
-    except Exception:
-        pass
 
     return str(int(time.time()))
 
@@ -62,23 +50,160 @@ CONFIG_FILE = "config.json"
 LOGS_DIR = "logs"
 
 # Default configuration
+DEFAULT_ENDPOINT_ID = "default"
+DEFAULT_ENDPOINT_NAME = "default"
+DEFAULT_VIDEO_SETTINGS = {
+    "width": 1280,
+    "height": 720,
+    "bitrate": "1000k",
+    "framerate": 30,
+    "buffer_size": "2000k",
+    "container": "mp4",
+    "crf": 26  # ADDED: Default CRF value
+}
+
 DEFAULT_CONFIG = {
-    "stash_url": "http://localhost:9999",
-    "api_key": "",
-    "overwrite_original": False,
     "default_search_limit": 50,
     "max_concurrent_tasks": 2,
-    "video_settings": {
-        "width": 1280,
-        "height": 720,
-        "bitrate": "1000k",
-        "framerate": 30,
-        "buffer_size": "2000k",
-        "container": "mp4",
-        "crf": 26  # ADDED: Default CRF value
-    },
-    "path_mappings": []
+    "overwrite_original": False,
+    "endpoints": [
+        {
+            "id": DEFAULT_ENDPOINT_ID,
+            "name": DEFAULT_ENDPOINT_NAME,
+            "stash_url": "http://localhost:9999",
+            "api_key": "",
+            "video_settings": DEFAULT_VIDEO_SETTINGS.copy(),
+            "path_mappings": []
+        }
+    ],
+    "active_endpoint_id": DEFAULT_ENDPOINT_ID
 }
+
+
+def build_default_endpoint(endpoint_id: Optional[str] = None, name: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "id": endpoint_id or DEFAULT_ENDPOINT_ID,
+        "name": name or DEFAULT_ENDPOINT_NAME,
+        "stash_url": "http://localhost:9999",
+        "api_key": "",
+        "video_settings": DEFAULT_VIDEO_SETTINGS.copy(),
+        "path_mappings": []
+    }
+
+
+def normalize_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    updated = False
+
+    if config is None:
+        return copy.deepcopy(DEFAULT_CONFIG), True
+
+    if 'delete_original' in config and 'overwrite_original' not in config:
+        config['overwrite_original'] = config['delete_original']
+        del config['delete_original']
+        updated = True
+
+    # Legacy config migration (single endpoint)
+    if 'endpoints' not in config:
+        endpoint = build_default_endpoint()
+        endpoint['stash_url'] = config.get('stash_url', endpoint['stash_url'])
+        endpoint['api_key'] = config.get('api_key', endpoint['api_key'])
+
+        legacy_video_settings = config.get('video_settings') or {}
+        merged_video_settings = DEFAULT_VIDEO_SETTINGS.copy()
+        merged_video_settings.update(legacy_video_settings)
+        endpoint['video_settings'] = merged_video_settings
+
+        endpoint['path_mappings'] = config.get('path_mappings', []) or []
+
+        config = {
+            "default_search_limit": config.get('default_search_limit', DEFAULT_CONFIG['default_search_limit']),
+            "max_concurrent_tasks": config.get('max_concurrent_tasks', DEFAULT_CONFIG['max_concurrent_tasks']),
+            "overwrite_original": config.get('overwrite_original', DEFAULT_CONFIG['overwrite_original']),
+            "endpoints": [endpoint],
+            "active_endpoint_id": endpoint['id']
+        }
+        updated = True
+
+    # Ensure global defaults
+    if 'default_search_limit' not in config:
+        config['default_search_limit'] = DEFAULT_CONFIG['default_search_limit']
+        updated = True
+    if 'max_concurrent_tasks' not in config:
+        config['max_concurrent_tasks'] = DEFAULT_CONFIG['max_concurrent_tasks']
+        updated = True
+    if 'overwrite_original' not in config:
+        config['overwrite_original'] = DEFAULT_CONFIG['overwrite_original']
+        updated = True
+
+    # Ensure endpoints list exists
+    if not isinstance(config.get('endpoints'), list) or len(config.get('endpoints', [])) == 0:
+        config['endpoints'] = [build_default_endpoint()]
+        updated = True
+
+    # Normalize each endpoint
+    for index, endpoint in enumerate(config['endpoints']):
+        if not isinstance(endpoint, dict):
+            endpoint = {}
+            config['endpoints'][index] = endpoint
+            updated = True
+
+        if not endpoint.get('id'):
+            endpoint['id'] = DEFAULT_ENDPOINT_ID if index == 0 else str(uuid.uuid4())
+            updated = True
+
+        if not endpoint.get('name'):
+            endpoint['name'] = DEFAULT_ENDPOINT_NAME if index == 0 else f"Endpoint {index + 1}"
+            updated = True
+
+        if not endpoint.get('stash_url'):
+            endpoint['stash_url'] = DEFAULT_CONFIG['endpoints'][0]['stash_url']
+            updated = True
+
+        if 'api_key' not in endpoint:
+            endpoint['api_key'] = ""
+            updated = True
+
+        video_settings = endpoint.get('video_settings') or {}
+        merged_video_settings = DEFAULT_VIDEO_SETTINGS.copy()
+        merged_video_settings.update(video_settings)
+        if merged_video_settings != video_settings:
+            endpoint['video_settings'] = merged_video_settings
+            updated = True
+
+        if 'path_mappings' not in endpoint or endpoint['path_mappings'] is None:
+            endpoint['path_mappings'] = []
+            updated = True
+
+    active_endpoint_id = config.get('active_endpoint_id')
+    if not active_endpoint_id or not any(
+        endpoint.get('id') == active_endpoint_id for endpoint in config['endpoints']
+    ):
+        config['active_endpoint_id'] = config['endpoints'][0]['id']
+        updated = True
+
+    return config, updated
+
+
+def get_endpoint_config(endpoint_id: Optional[str] = None, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    config = config or get_config()
+    endpoints = config.get('endpoints', [])
+
+    if not endpoints:
+        raise ValueError("No stash endpoints configured.")
+
+    if endpoint_id:
+        for endpoint in endpoints:
+            if endpoint.get('id') == endpoint_id:
+                return endpoint
+        raise ValueError(f"Unknown stash endpoint: {endpoint_id}")
+
+    active_endpoint_id = config.get('active_endpoint_id')
+    if active_endpoint_id:
+        for endpoint in endpoints:
+            if endpoint.get('id') == active_endpoint_id:
+                return endpoint
+
+    return endpoints[0]
 
 # Global state
 queue_initialized = False
@@ -111,14 +236,21 @@ sse_update_queue = Queue()
 # Ensure logs directory exists
 Path(LOGS_DIR).mkdir(exist_ok=True)
 
-class Settings(BaseModel):
+class EndpointConfig(BaseModel):
+    id: str
+    name: str
     stash_url: str
-    api_key: str
-    default_search_limit: int
-    max_concurrent_tasks: int
-    overwrite_original: bool = True
+    api_key: str = ""
     video_settings: Dict[str, Any]
     path_mappings: List[str]
+
+
+class Settings(BaseModel):
+    default_search_limit: int
+    max_concurrent_tasks: int
+    overwrite_original: bool = False
+    endpoints: List[EndpointConfig]
+    active_endpoint_id: Optional[str] = None
 
 class SearchParams(BaseModel):
     max_width: Optional[int] = None
@@ -127,6 +259,12 @@ class SearchParams(BaseModel):
     max_framerate: Optional[float] = None
     codec: Optional[str] = None
     path: Optional[str] = None
+    endpoint_id: Optional[str] = None
+
+
+class QueueRequest(BaseModel):
+    scene_ids: List[str]
+    endpoint_id: Optional[str] = None
 
 class SceneFile(BaseModel):
     id: str
@@ -167,6 +305,7 @@ class Scene(BaseModel):
 class ConversionTask(BaseModel):
     task_id: str
     scene: Scene
+    endpoint_id: Optional[str] = None
     status: str = "pending"  # pending, processing, completed, completed_with_warning, error, cancelled
     progress: float = 0.0
     eta: Optional[float] = None
@@ -301,9 +440,8 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
-            if 'delete_original' in config and 'overwrite_original' not in config:
-                config['overwrite_original'] = config['delete_original']
-                del config['delete_original']
+            config, updated = normalize_config(config)
+            if updated:
                 save_config(config)
             return config
     return None
@@ -315,7 +453,7 @@ def save_config(config):
 def get_config():
     config = load_config()
     if config is None:
-        return DEFAULT_CONFIG
+        return copy.deepcopy(DEFAULT_CONFIG)
     return config
 
 def is_first_run():
@@ -329,6 +467,7 @@ def save_queue_state():
             task_data = {
                 "task_id": task.task_id,
                 "scene": task.scene.dict(),
+                "endpoint_id": task.endpoint_id,
                 "status": task.status,
                 "progress": task.progress,
                 "eta": task.eta,
@@ -358,11 +497,17 @@ def load_queue_state():
             with open(QUEUE_STATE_FILE, 'r') as f:
                 queue_data = json.load(f)
 
+            config = get_config()
+            default_endpoint_id = config.get('active_endpoint_id')
+            if not default_endpoint_id and config.get('endpoints'):
+                default_endpoint_id = config['endpoints'][0].get('id')
+
             for task_data in queue_data:
                 scene = Scene(**task_data["scene"])
                 task = ConversionTask(
                     task_id=task_data["task_id"],
                     scene=scene,
+                    endpoint_id=task_data.get("endpoint_id") or default_endpoint_id,
                     status=task_data["status"],
                     progress=task_data["progress"],
                     eta=task_data["eta"],
@@ -583,21 +728,26 @@ def apply_path_mappings(file_path: str, path_mappings: List[str]) -> str:
 
     return file_path
 
-async def stash_request(graphql_query: str, variables: dict = None):
+async def stash_request(graphql_query: str, variables: dict = None, endpoint_id: Optional[str] = None):
     config = get_config()
+    try:
+        endpoint = get_endpoint_config(endpoint_id, config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     headers = {}
-    if config.get('api_key'):
-        headers['ApiKey'] = config['api_key']
+    if endpoint.get('api_key'):
+        headers['ApiKey'] = endpoint['api_key']
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            logger.info(f"Making GraphQL request to {config['stash_url']}/graphql")
+            logger.info(f"Making GraphQL request to {endpoint['stash_url']}/graphql")
             logger.debug(f"GraphQL Query: {graphql_query}")
             if variables:
                 logger.debug(f"GraphQL Variables: {variables}")
 
             response = await client.post(
-                f"{config['stash_url']}/graphql",
+                f"{endpoint['stash_url']}/graphql",
                 json={"query": graphql_query, "variables": variables},
                 headers=headers
             )
@@ -633,16 +783,16 @@ async def stash_request(graphql_query: str, variables: dict = None):
 
             return result
     except httpx.ConnectError as e:
-        logger.error(f"Connection error to Stash at {config['stash_url']}: {e}")
+        logger.error(f"Connection error to Stash at {endpoint['stash_url']}: {e}")
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot connect to Stash at {config['stash_url']}. Please check if the URL is correct and Stash is running."
+            detail=f"Cannot connect to Stash at {endpoint['stash_url']}. Please check if the URL is correct and Stash is running."
         )
     except httpx.TimeoutException as e:
         logger.error(f"Timeout connecting to Stash: {e}")
         raise HTTPException(
             status_code=400,
-            detail=f"Connection timeout to Stash at {config['stash_url']}. Please check if Stash is running and accessible."
+            detail=f"Connection timeout to Stash at {endpoint['stash_url']}. Please check if Stash is running and accessible."
         )
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error from Stash: {e.response.status_code}")
@@ -740,9 +890,11 @@ async def convert_video_threaded(task: ConversionTask):
     """Run FFmpeg in a thread pool to avoid blocking the event loop"""
     config = get_config()
     overwrite_original = config.get('overwrite_original', True)
-    video_settings = config['video_settings']
 
     try:
+        endpoint = get_endpoint_config(task.endpoint_id, config)
+        video_settings = endpoint['video_settings']
+
         if not task.scene.files or len(task.scene.files) == 0:
             raise Exception("No files found in scene")
 
@@ -897,9 +1049,9 @@ async def convert_video_threaded(task: ConversionTask):
             try:
                 if overwrite_original and original_extension == new_extension:
                     # Already handled during conversion (original replaced)
-                    await trigger_stash_scan(final_output)
+                    await trigger_stash_scan(final_output, endpoint_id=task.endpoint_id)
                 elif overwrite_original and original_extension != new_extension:
-                    await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original)
+                    await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original, endpoint_id=task.endpoint_id)
 
                     # Only delete original after successful Stash update
                     if overwrite_original and os.path.exists(input_file):
@@ -907,7 +1059,7 @@ async def convert_video_threaded(task: ConversionTask):
                         logger.info(f"[Task {task.task_id}] Deleted original file: {input_file}")
                 else:
                     # Non-overwrite mode: add as new file
-                    await add_file_to_scene(task.scene.id, final_output, overwrite_original)
+                    await add_file_to_scene(task.scene.id, final_output, overwrite_original, endpoint_id=task.endpoint_id)
 
                 task.status = "completed"
                 task.output_file = final_output
@@ -1016,6 +1168,8 @@ async def process_sse_update_queue():
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up Stash Shrink")
+    global STATIC_CACHE_BUSTER
+    STATIC_CACHE_BUSTER = compute_cache_buster()
     global sse_shutdown_event
     sse_shutdown_event = asyncio.Event()
     initialize_queue_system()
@@ -1140,12 +1294,19 @@ async def apply_update():
 
 @app.post("/api/config")
 async def update_config(settings: Settings):
-    save_config(settings.dict())
+    config, _ = normalize_config(settings.dict())
+    save_config(config)
     return {"status": "ok"}
 
 @app.post("/api/search")
 async def search_scenes(search_params: SearchParams):
     try:
+        config = get_config()
+        try:
+            endpoint = get_endpoint_config(search_params.endpoint_id, config)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
         query = """
         query FindAllScenes {
           findScenes(
@@ -1176,7 +1337,7 @@ async def search_scenes(search_params: SearchParams):
         """
 
         logger.info("Executing GraphQL query to find all scenes")
-        result = await stash_request(query)
+        result = await stash_request(query, endpoint_id=endpoint['id'])
 
         if 'errors' in result:
             query_fallback = """
@@ -1208,7 +1369,7 @@ async def search_scenes(search_params: SearchParams):
             }
             """
             logger.info("Trying fallback query with per_page: 10000")
-            result = await stash_request(query_fallback)
+            result = await stash_request(query_fallback, endpoint_id=endpoint['id'])
 
             if 'errors' in result:
                 raise HTTPException(status_code=400, detail=f"GraphQL error: {result['errors']}")
@@ -1219,8 +1380,7 @@ async def search_scenes(search_params: SearchParams):
         logger.info(f"Found {actual_count} scenes in Stash")
 
         scenes = []
-        config = get_config()
-        path_mappings = config.get('path_mappings', [])
+        path_mappings = endpoint.get('path_mappings', [])
 
         for scene_data in scenes_data:
             try:
@@ -1357,12 +1517,18 @@ async def get_conversion_log(task_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to read log: {str(e)}")
 
 @app.post("/api/queue-conversion")
-async def queue_conversion(scene_ids: List[str]):
+async def queue_conversion(payload: QueueRequest):
     config = get_config()
-    path_mappings = config.get('path_mappings', [])
+    try:
+        endpoint = get_endpoint_config(payload.endpoint_id, config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    existing_scene_ids = {task.scene.id for task in conversion_queue}
-    new_scene_ids = set(scene_ids) - existing_scene_ids
+    path_mappings = endpoint.get('path_mappings', [])
+    endpoint_id = endpoint.get('id')
+
+    existing_scene_ids = {(task.endpoint_id, task.scene.id) for task in conversion_queue}
+    new_scene_ids = {scene_id for scene_id in payload.scene_ids if (endpoint_id, scene_id) not in existing_scene_ids}
     scene_ids = list(new_scene_ids)
 
     try:
@@ -1390,7 +1556,7 @@ async def queue_conversion(scene_ids: List[str]):
         }
         """
 
-        result = await stash_request_with_retry(scenes_query, {"ids": scene_ids})
+        result = await stash_request_with_retry(scenes_query, {"ids": scene_ids}, endpoint_id=endpoint_id)
         if 'errors' in result:
             raise HTTPException(status_code=400, detail=result['errors'])
 
@@ -1411,6 +1577,7 @@ async def queue_conversion(scene_ids: List[str]):
                     task = ConversionTask(
                         task_id=task_id,
                         scene=scene,
+                        endpoint_id=endpoint_id,
                         log_file=log_file
                     )
 
@@ -1482,6 +1649,8 @@ async def fix_stash_update(task: ConversionTask):
     overwrite_original = config.get('overwrite_original', True)
 
     try:
+        endpoint = get_endpoint_config(task.endpoint_id, config)
+
         if not task.scene.files or len(task.scene.files) == 0:
             raise Exception("No files found in scene")
 
@@ -1522,7 +1691,7 @@ async def fix_stash_update(task: ConversionTask):
 
         # Determine the operation based on original settings
         original_extension = os.path.splitext(input_file)[1].lower()
-        video_settings = config['video_settings']
+        video_settings = endpoint['video_settings']
         new_extension = f".{video_settings['container']}"
 
         # Perform the appropriate Stash operation
@@ -1534,14 +1703,14 @@ async def fix_stash_update(task: ConversionTask):
             if overwrite_original and original_extension == new_extension:
                 # Same extension - already replaced, just trigger scan
                 stash_operation = "scan"
-                await trigger_stash_scan(final_output)
+                await trigger_stash_scan(final_output, endpoint_id=task.endpoint_id)
                 logger.info(f"[Fix Stash] Triggered metadata scan for: {final_output}")
                 success = True
 
             elif overwrite_original and original_extension != new_extension:
                 # Different extensions with overwrite
                 stash_operation = "update"
-                await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original)
+                await update_stash_file(task.scene.id, scene_file.id, final_output, overwrite_original, endpoint_id=task.endpoint_id)
                 logger.info(f"[Fix Stash] Updated Stash file entry")
 
                 # Delete original only after successful Stash update
@@ -1553,7 +1722,7 @@ async def fix_stash_update(task: ConversionTask):
             else:
                 # Non-overwrite mode: add as new file
                 stash_operation = "add"
-                await add_file_to_scene(task.scene.id, final_output, overwrite_original)
+                await add_file_to_scene(task.scene.id, final_output, overwrite_original, endpoint_id=task.endpoint_id)
                 logger.info(f"[Fix Stash] Added file to scene")
                 success = True
 
@@ -1962,9 +2131,10 @@ async def find_available_filename(base_name: str, container: str, max_attempts: 
     timestamp = int(time.time())
     return f"{base_name}_{timestamp}.{container}"
 
-async def trigger_stash_scan(file_path: str):
+async def trigger_stash_scan(file_path: str, endpoint_id: Optional[str] = None):
     config = get_config()
-    path_mappings = config.get('path_mappings', [])
+    endpoint = get_endpoint_config(endpoint_id, config)
+    path_mappings = endpoint.get('path_mappings', [])
 
     docker_path = apply_path_mappings(file_path, path_mappings)
 
@@ -1974,16 +2144,17 @@ async def trigger_stash_scan(file_path: str):
     }
     """
     try:
-        await stash_request(scan_mutation, {"path": docker_path})
+        await stash_request(scan_mutation, {"path": docker_path}, endpoint_id=endpoint.get('id'))
         logger.info(f"Triggered metadata scan for: {docker_path}")
     except Exception as e:
         logger.warning(f"Metadata scan failed (non-critical): {e}")
         raise Exception(f"Stash scan failed: {str(e)}")
 
-async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_original: bool):
+async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_original: bool, endpoint_id: Optional[str] = None):
     """Add a new file to a scene in Stash (for non-overwrite mode)"""
     config = get_config()
-    path_mappings = config.get('path_mappings', [])
+    endpoint = get_endpoint_config(endpoint_id, config)
+    path_mappings = endpoint.get('path_mappings', [])
 
     # Convert the host path back to Docker path for Stash
     docker_path = apply_path_mappings(new_file_path, path_mappings)
@@ -2006,7 +2177,7 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
     """
 
     try:
-        scene_result = await stash_request(check_scene_files_query, {"scene_id": scene_id})
+        scene_result = await stash_request(check_scene_files_query, {"scene_id": scene_id}, endpoint_id=endpoint.get('id'))
         if scene_result['data']['findScene']['files']:
             for file in scene_result['data']['findScene']['files']:
                 if file['basename'] == new_basename or file['path'] == docker_path:
@@ -2018,7 +2189,7 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
 
     # Try to scan the file first (but don't fail if it doesn't work)
     try:
-        await trigger_stash_scan(new_file_path)
+        await trigger_stash_scan(new_file_path, endpoint_id=endpoint.get('id'))
         logger.info(f"[Add File] File scan triggered")
     except Exception as scan_error:
         logger.warning(f"[Add File] Scan might have failed: {scan_error}")
@@ -2044,7 +2215,11 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
     for attempt in range(max_attempts):
         try:
             logger.info(f"[Add File] Trying to find new scene of converted file")
-            scene_of_file_result = await stash_request_with_retry(find_scene_of_file_query, {"scene_filter": {"path": {"value": docker_path, "modifier": "EQUALS"}}})
+            scene_of_file_result = await stash_request_with_retry(
+                find_scene_of_file_query,
+                {"scene_filter": {"path": {"value": docker_path, "modifier": "EQUALS"}}},
+                endpoint_id=endpoint.get('id')
+            )
             if scene_of_file_result['data']['findScenes']['scenes']:
                 scene_of_file_id = scene_of_file_result['data']['findScenes']['scenes'][0]['id']
                 logger.info(f"[Add File] Found scene of file in Stash with ID: {scene_of_file_id}")
@@ -2087,7 +2262,7 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
         """
 
         try:
-            result = await stash_request(merge_mutation)
+            result = await stash_request(merge_mutation, endpoint_id=endpoint.get('id'))
             logger.info(f"[Add File] Successfully added file {new_basename} to scene {scene_id}")
             return
         except HTTPException as e:
@@ -2107,14 +2282,14 @@ async def add_file_to_scene(scene_id: str, new_file_path: str, overwrite_origina
 
     raise Exception(f"All methods failed to add file to scene. File exists at {docker_path}")
 
-async def stash_request_with_retry(graphql_query: str, variables: dict = None, max_retries: int = 5):
+async def stash_request_with_retry(graphql_query: str, variables: dict = None, max_retries: int = 5, endpoint_id: Optional[str] = None):
     """Make a Stash request with retry logic"""
     wait_times = [2, 4, 8, 12]
     last_exception = None
 
     for attempt in range(max_retries):
         try:
-            return await stash_request(graphql_query, variables)
+            return await stash_request(graphql_query, variables, endpoint_id=endpoint_id)
         except HTTPException as e:
             last_exception = e
             if attempt < max_retries - 1:
@@ -2135,9 +2310,10 @@ async def stash_request_with_retry(graphql_query: str, variables: dict = None, m
     if last_exception:
         raise last_exception
 
-async def update_stash_file(scene_id: str, file_id: str, new_file_path: str, overwrite_original: bool):
+async def update_stash_file(scene_id: str, file_id: str, new_file_path: str, overwrite_original: bool, endpoint_id: Optional[str] = None):
     config = get_config()
-    path_mappings = config.get('path_mappings', [])
+    endpoint = get_endpoint_config(endpoint_id, config)
+    path_mappings = endpoint.get('path_mappings', [])
 
     docker_path = apply_path_mappings(new_file_path, path_mappings)
     new_basename = os.path.basename(docker_path)
@@ -2153,11 +2329,11 @@ async def update_stash_file(scene_id: str, file_id: str, new_file_path: str, ove
         rows_affected
       }}
      }}
-     """
+    """
 
     try:
         logger.info(f"Updating Stash file {file_id} with execSQL: {sql}")
-        await stash_request(exec_sql_mutation, {})
+        await stash_request(exec_sql_mutation, {}, endpoint_id=endpoint.get('id'))
         logger.info(f"Successfully updated Stash file {file_id} with new basename: {new_basename}")
     except Exception as e:
         logger.error(f"Failed to update Stash file via execSQL: {e}")
@@ -2170,7 +2346,7 @@ async def update_stash_file(scene_id: str, file_id: str, new_file_path: str, ove
         }
         """
         try:
-            await stash_request(scan_mutation, {"path": docker_path})
+            await stash_request(scan_mutation, {"path": docker_path}, endpoint_id=endpoint.get('id'))
             logger.info(f"Triggered metadata scan for: {docker_path}")
         except Exception as e:
             logger.warning(f"Metadata scan failed (non-critical): {e}")
@@ -2196,6 +2372,7 @@ async def sse_endpoint(request: Request):
                             "title": task.scene.title,
                             "files": [file.dict() for file in task.scene.files] if task.scene.files else []
                         },
+                        "endpoint_id": task.endpoint_id,
                         "status": task.status,
                         "progress": task.progress,
                         "eta": task.eta,

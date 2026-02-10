@@ -113,6 +113,48 @@ h1, h2, h3 {
     gap: 0.5rem;
 }
 
+.form-actions.search-actions {
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.form-actions.search-actions .search-actions-left {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.form-actions.search-actions .search-actions-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.form-actions.search-actions .search-actions-right label {
+    margin: 0;
+    font-weight: 500;
+}
+
+.form-actions.search-actions .search-actions-right select {
+    min-width: 200px;
+}
+
+.endpoint-selector-row {
+    align-items: flex-end;
+}
+
+.endpoint-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+    justify-content: flex-end;
+}
+
+.endpoint-actions .btn {
+    white-space: nowrap;
+}
+
 .form-section {
     margin-bottom: 1.5rem;
     padding: 1rem;
@@ -1108,6 +1150,17 @@ body.first-run header {
 
     .search-form .form-row .form-group {
         margin-bottom: 0;
+    }
+
+    .form-actions.search-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .form-actions.search-actions .search-actions-right {
+        margin-left: 0;
+        flex-direction: column;
+        align-items: stretch;
     }
 
     .modal-content {

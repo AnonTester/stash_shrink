@@ -42,9 +42,15 @@
                     <input type="text" id="path" name="path" placeholder="Partial path to filter">
                 </div>
             </div>
-            <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Search</button>
-                <button type="button" id="use-video-settings" class="btn btn-secondary">Use Video Settings</button>
+            <div class="form-actions search-actions">
+                <div class="search-actions-left">
+                    <button type="submit" class="btn btn-primary">Search</button>
+                    <button type="button" id="use-video-settings" class="btn btn-secondary">Use Video Settings</button>
+                </div>
+                <div class="search-actions-right" id="search-endpoint-container" style="display: none;">
+                    <label for="search-endpoint">Endpoint:</label>
+                    <select id="search-endpoint" name="endpoint_id"></select>
+                </div>
             </div>
         </form>
     </section>

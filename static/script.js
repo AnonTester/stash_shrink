@@ -15,6 +15,10 @@ class StashShrinkApp {
         this.totalPages = 1;
         this.updateStatus = null;
         this.lastUpdatePromptedVersion = null;
+        this.endpointConfigs = [];
+        this.settingsEndpointId = null;
+        this.searchEndpointId = null;
+        this.currentResultsEndpointId = null;
 
         // Store section references
         this.searchSection = document.querySelector('.search-section');
@@ -91,7 +95,10 @@ class StashShrinkApp {
 
     updateQueuedSceneIds(queue) {
         // Only update if there's an actual change
-        const newIds = new Set(queue ? queue.map(task => task.scene.id) : []);
+        const newIds = new Set(queue ? queue.map(task => {
+            const endpointId = task.endpoint_id || this.config?.active_endpoint_id;
+            return this.getQueueSceneKey(task.scene.id, endpointId);
+        }) : []);
         if (this.setsAreEqual(this.queuedSceneIds, newIds)) {
             return; // No change, don't re-render
         }
@@ -109,6 +116,249 @@ class StashShrinkApp {
             if (!set2.has(item)) return false;
         }
         return true;
+    }
+
+    getDefaultVideoSettings() {
+        return {
+            width: 1280,
+            height: 720,
+            bitrate: '1000k',
+            framerate: 30,
+            buffer_size: '2000k',
+            container: 'mp4',
+            crf: 26
+        };
+    }
+
+    generateEndpointId() {
+        if (window.crypto && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        return `endpoint-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    createEndpointConfig(name) {
+        return {
+            id: this.generateEndpointId(),
+            name: name || 'Endpoint',
+            stash_url: '',
+            api_key: '',
+            video_settings: { ...this.getDefaultVideoSettings() },
+            path_mappings: []
+        };
+    }
+
+    normalizeEndpointConfig(endpoint, index) {
+        const normalized = { ...endpoint };
+        if (!normalized.id) {
+            normalized.id = this.generateEndpointId();
+        }
+        if (!normalized.name) {
+            normalized.name = index === 0 ? 'default' : `Endpoint ${index + 1}`;
+        }
+        normalized.stash_url = normalized.stash_url || '';
+        normalized.api_key = normalized.api_key || '';
+        normalized.video_settings = {
+            ...this.getDefaultVideoSettings(),
+            ...(normalized.video_settings || {})
+        };
+        normalized.path_mappings = Array.isArray(normalized.path_mappings) ? normalized.path_mappings : [];
+        return normalized;
+    }
+
+    initializeEndpointState() {
+        if (!this.config) return;
+
+        let endpoints = [];
+        if (Array.isArray(this.config.endpoints)) {
+            endpoints = this.config.endpoints;
+        } else if (this.config.stash_url) {
+            endpoints = [{
+                id: 'default',
+                name: 'default',
+                stash_url: this.config.stash_url,
+                api_key: this.config.api_key || '',
+                video_settings: this.config.video_settings || {},
+                path_mappings: this.config.path_mappings || []
+            }];
+        }
+
+        this.endpointConfigs = endpoints.map((endpoint, index) => this.normalizeEndpointConfig(endpoint, index));
+
+        if (this.endpointConfigs.length === 0) {
+            const defaultEndpoint = this.createEndpointConfig('default');
+            defaultEndpoint.name = 'default';
+            this.endpointConfigs = [this.normalizeEndpointConfig(defaultEndpoint, 0)];
+        }
+
+        this.config.endpoints = this.endpointConfigs;
+
+        const activeId = this.config.active_endpoint_id;
+        if (!activeId || !this.getEndpointById(activeId)) {
+            this.config.active_endpoint_id = this.endpointConfigs[0].id;
+        }
+
+        const normalizedActiveId = this.config.active_endpoint_id;
+        if (!this.settingsEndpointId || !this.getEndpointById(this.settingsEndpointId)) {
+            this.settingsEndpointId = normalizedActiveId;
+        }
+
+        if (!this.searchEndpointId || !this.getEndpointById(this.searchEndpointId)) {
+            this.searchEndpointId = normalizedActiveId;
+        }
+
+        if (!this.currentResultsEndpointId || !this.getEndpointById(this.currentResultsEndpointId)) {
+            this.currentResultsEndpointId = this.searchEndpointId;
+        }
+
+        this.renderSearchEndpointOptions();
+    }
+
+    getEndpointById(endpointId) {
+        if (!this.endpointConfigs) return null;
+        return this.endpointConfigs.find(endpoint => endpoint.id === endpointId) || null;
+    }
+
+    renderEndpointSelectOptions() {
+        const select = document.getElementById('endpoint-config-select');
+        if (!select) return;
+
+        select.innerHTML = '';
+        this.endpointConfigs.forEach(endpoint => {
+            const option = document.createElement('option');
+            option.value = endpoint.id;
+            option.textContent = endpoint.name || endpoint.stash_url || 'Endpoint';
+            select.appendChild(option);
+        });
+
+        if (!this.settingsEndpointId || !this.getEndpointById(this.settingsEndpointId)) {
+            this.settingsEndpointId = this.endpointConfigs[0]?.id || null;
+        }
+
+        select.value = this.settingsEndpointId || '';
+        this.updateEndpointActionState();
+    }
+
+    renderSearchEndpointOptions() {
+        const select = document.getElementById('search-endpoint');
+        const container = document.getElementById('search-endpoint-container');
+        if (!select || !container) return;
+
+        select.innerHTML = '';
+        this.endpointConfigs.forEach(endpoint => {
+            const option = document.createElement('option');
+            option.value = endpoint.id;
+            option.textContent = endpoint.name || endpoint.stash_url || 'Endpoint';
+            select.appendChild(option);
+        });
+
+        const showSelector = this.endpointConfigs.length > 1;
+        container.style.display = showSelector ? 'flex' : 'none';
+
+        if (!this.searchEndpointId || !this.getEndpointById(this.searchEndpointId)) {
+            this.searchEndpointId = this.config?.active_endpoint_id || this.endpointConfigs[0]?.id || null;
+        }
+
+        select.value = this.searchEndpointId || '';
+    }
+
+    updateEndpointActionState() {
+        const removeButton = document.getElementById('remove-endpoint');
+        if (!removeButton) return;
+        removeButton.disabled = this.endpointConfigs.length <= 1;
+    }
+
+    populateEndpointForm() {
+        const endpoint = this.getEndpointById(this.settingsEndpointId);
+        if (!endpoint) return;
+
+        const form = document.getElementById('settings-form');
+        form.endpoint_name.value = endpoint.name || '';
+        form.stash_url.value = endpoint.stash_url || '';
+        form.api_key.value = endpoint.api_key || '';
+
+        const videoSettings = endpoint.video_settings || {};
+        form.width.value = videoSettings.width || '';
+        form.height.value = videoSettings.height || '';
+        form.bitrate.value = videoSettings.bitrate || '';
+        form.framerate.value = videoSettings.framerate || '';
+        form.buffer_size.value = videoSettings.buffer_size || '';
+        form.container.value = videoSettings.container || '';
+        form.crf.value = videoSettings.crf || 26;
+        document.getElementById('crf-value').textContent = videoSettings.crf || 26;
+
+        const pathMappings = endpoint.path_mappings || [];
+        form.path_mappings.value = pathMappings.join('\n');
+    }
+
+    persistEndpointForm() {
+        const endpoint = this.getEndpointById(this.settingsEndpointId);
+        if (!endpoint) return;
+
+        const form = document.getElementById('settings-form');
+        endpoint.name = (form.endpoint_name.value || '').trim() || endpoint.name || 'default';
+        endpoint.stash_url = (form.stash_url.value || '').trim();
+        endpoint.api_key = (form.api_key.value || '').trim();
+        endpoint.path_mappings = form.path_mappings.value
+            ? form.path_mappings.value.split('\n').filter(mapping => mapping.trim())
+            : [];
+        endpoint.video_settings = {
+            width: parseInt(form.width.value) || 1280,
+            height: parseInt(form.height.value) || 720,
+            bitrate: form.bitrate.value || '1000k',
+            framerate: parseFloat(form.framerate.value) || 30,
+            buffer_size: form.buffer_size.value || '2000k',
+            container: form.container.value || 'mp4',
+            crf: parseInt(form.crf.value) || 26
+        };
+    }
+
+    getQueueSceneKey(sceneId, endpointId) {
+        return `${endpointId || 'default'}:${sceneId}`;
+    }
+
+    addEndpoint() {
+        this.persistEndpointForm();
+
+        const existingNames = new Set(this.endpointConfigs.map(endpoint => (endpoint.name || '').toLowerCase()));
+        let index = this.endpointConfigs.length + 1;
+        let name = `Endpoint ${index}`;
+        while (existingNames.has(name.toLowerCase())) {
+            index += 1;
+            name = `Endpoint ${index}`;
+        }
+
+        const newEndpoint = this.createEndpointConfig(name);
+        this.endpointConfigs.push(newEndpoint);
+        this.settingsEndpointId = newEndpoint.id;
+        this.renderEndpointSelectOptions();
+        this.populateEndpointForm();
+        this.renderSearchEndpointOptions();
+    }
+
+    removeEndpoint() {
+        if (this.endpointConfigs.length <= 1) {
+            this.showToast('At least one endpoint is required.', 'warning');
+            return;
+        }
+
+        const removeIndex = this.endpointConfigs.findIndex(endpoint => endpoint.id === this.settingsEndpointId);
+        if (removeIndex === -1) return;
+
+        const removedEndpoint = this.endpointConfigs.splice(removeIndex, 1)[0];
+        const fallbackId = this.endpointConfigs[0]?.id || null;
+
+        this.settingsEndpointId = fallbackId;
+        if (this.searchEndpointId === removedEndpoint.id) {
+            this.searchEndpointId = fallbackId;
+        }
+        if (this.currentResultsEndpointId === removedEndpoint.id) {
+            this.currentResultsEndpointId = fallbackId;
+        }
+
+        this.renderEndpointSelectOptions();
+        this.populateEndpointForm();
+        this.renderSearchEndpointOptions();
     }
 
     initializeToastSystem() {
@@ -237,12 +487,50 @@ class StashShrinkApp {
             this.saveSettings(new FormData(e.target));
         });
 
+        const endpointSelect = document.getElementById('endpoint-config-select');
+        if (endpointSelect) {
+            endpointSelect.addEventListener('change', (e) => {
+                this.persistEndpointForm();
+                this.settingsEndpointId = e.target.value;
+                this.populateEndpointForm();
+                this.renderSearchEndpointOptions();
+            });
+        }
+
+        const endpointNameInput = document.getElementById('endpoint_name');
+        if (endpointNameInput) {
+            endpointNameInput.addEventListener('input', (e) => {
+                const endpoint = this.getEndpointById(this.settingsEndpointId);
+                if (!endpoint) return;
+                endpoint.name = e.target.value;
+                this.renderEndpointSelectOptions();
+                this.renderSearchEndpointOptions();
+            });
+        }
+
+        const addEndpointButton = document.getElementById('add-endpoint');
+        if (addEndpointButton) {
+            addEndpointButton.addEventListener('click', () => this.addEndpoint());
+        }
+
+        const removeEndpointButton = document.getElementById('remove-endpoint');
+        if (removeEndpointButton) {
+            removeEndpointButton.addEventListener('click', () => this.removeEndpoint());
+        }
+
         // CRF slider value display
         const crfSlider = document.getElementById('crf');
         const crfValue = document.getElementById('crf-value');
         if (crfSlider && crfValue) {
             crfSlider.addEventListener('input', (e) => {
                 crfValue.textContent = e.target.value;
+            });
+        }
+
+        const searchEndpointSelect = document.getElementById('search-endpoint');
+        if (searchEndpointSelect) {
+            searchEndpointSelect.addEventListener('change', (e) => {
+                this.searchEndpointId = e.target.value;
             });
         }
 
@@ -262,7 +550,10 @@ class StashShrinkApp {
         document.getElementById('select-invert').addEventListener('click', () => this.selectInvert());
         document.getElementById('select-all-checkbox').addEventListener('change', (e) => {
             const currentPageScenes = this.getCurrentPageSceneIds();
-            const selectableSceneIds = currentPageScenes.filter(id => !this.queuedSceneIds.has(id));
+            const endpointId = this.currentResultsEndpointId || this.searchEndpointId;
+            const selectableSceneIds = currentPageScenes.filter(
+                id => !this.queuedSceneIds.has(this.getQueueSceneKey(id, endpointId))
+            );
 
             if (e.target.checked && selectableSceneIds.length > 0) {
                 this.selectAll();
@@ -449,6 +740,7 @@ class StashShrinkApp {
             const response = await fetch('/api/config');
             const config = await response.json();
             this.config = config;
+            this.initializeEndpointState();
         } catch (error) {
             console.error('Failed to load config:', error);
         }
@@ -663,39 +955,28 @@ class StashShrinkApp {
     populateSettingsForm() {
         if (!this.config) return;
 
+        this.initializeEndpointState();
+
         const form = document.getElementById('settings-form');
-        form.stash_url.value = this.config.stash_url || '';
-        form.api_key.value = this.config.api_key || '';
         form.default_search_limit.value = this.config.default_search_limit || 50;
         form.max_concurrent_tasks.value = this.config.max_concurrent_tasks || 2;
-
-        // Populate path mappings
-        const pathMappings = this.config.path_mappings || [];
-        form.path_mappings.value = pathMappings.join('\n');
 
         // Populate overwrite original setting
         const overwriteOriginal = this.config.overwrite_original !== false; // default to true
         form.overwrite_original.checked = overwriteOriginal;
 
-        const videoSettings = this.config.video_settings || {};
-        form.width.value = videoSettings.width || '';
-        form.height.value = videoSettings.height || '';
-        form.bitrate.value = videoSettings.bitrate || '';
-        form.framerate.value = videoSettings.framerate || '';
-        form.buffer_size.value = videoSettings.buffer_size || '';
-        form.container.value = videoSettings.container || '';
-        // Populate CRF setting
-        form.crf.value = videoSettings.crf || 26;
-        document.getElementById('crf-value').textContent = videoSettings.crf || 26;
+        this.renderEndpointSelectOptions();
+        this.populateEndpointForm();
     }
 
     useVideoSettings() {
-        if (!this.config || !this.config.video_settings) {
+        const endpoint = this.getEndpointById(this.searchEndpointId) || this.endpointConfigs[0];
+        if (!endpoint || !endpoint.video_settings) {
             this.showToast('Video settings not available', 'warning');
             return;
         }
 
-        const videoSettings = this.config.video_settings;
+        const videoSettings = endpoint.video_settings;
         document.getElementById('max_width').value = videoSettings.width || '';
         document.getElementById('max_height').value = videoSettings.height || '';
         document.getElementById('max_bitrate').value = videoSettings.bitrate || '';
@@ -706,22 +987,22 @@ class StashShrinkApp {
         try {
             console.log('Saving settings...');
 
+            this.persistEndpointForm();
+            if (!this.endpointConfigs || this.endpointConfigs.length === 0) {
+                this.endpointConfigs = [this.createEndpointConfig('default')];
+                this.settingsEndpointId = this.endpointConfigs[0].id;
+            }
+
+            if (!this.settingsEndpointId || !this.getEndpointById(this.settingsEndpointId)) {
+                this.settingsEndpointId = this.endpointConfigs[0].id;
+            }
+
             const settings = {
-                stash_url: formData.get('stash_url'),
-                api_key: formData.get('api_key'),
                 overwrite_original: formData.get('overwrite_original') === 'on',
                 default_search_limit: parseInt(formData.get('default_search_limit')) || 50,
                 max_concurrent_tasks: parseInt(formData.get('max_concurrent_tasks')) || 2,
-                path_mappings: formData.get('path_mappings') ? formData.get('path_mappings').split('\n').filter(m => m.trim()) : [],
-                video_settings: {
-                    width: parseInt(formData.get('width')) || 1280,
-                    height: parseInt(formData.get('height')) || 720,
-                    bitrate: formData.get('bitrate') || '1000k',
-                    framerate: parseFloat(formData.get('framerate')) || 30,
-                    buffer_size: formData.get('buffer_size') || '2000k',
-                    container: formData.get('container') || 'mp4',
-                    crf: parseInt(formData.get('crf')) || 26  // ADDED: CRF value
-                }
+                endpoints: this.endpointConfigs,
+                active_endpoint_id: this.settingsEndpointId
             };
 
             console.log('Sending settings:', settings);
@@ -736,6 +1017,7 @@ class StashShrinkApp {
 
             if (response.ok) {
                 this.config = settings;
+                this.initializeEndpointState();
 
                 if (this.isFirstRun) {
                     this.isFirstRun = false;
@@ -984,14 +1266,19 @@ class StashShrinkApp {
         const endIndex = this.pageSize === Infinity ? totalItems : Math.min(startIndex + this.pageSize, totalItems);
         const pageResults = displayResults.slice(startIndex, endIndex);
 
+        const endpointForResults = this.getEndpointById(this.currentResultsEndpointId) || this.endpointConfigs[0];
+        const endpointIdForResults = endpointForResults?.id || this.currentResultsEndpointId || this.searchEndpointId;
+        const stashBaseUrl = endpointForResults?.stash_url || '';
+
         pageResults.forEach(scene => {
             const file = scene.files && scene.files.length > 0 ? scene.files[0] : null;
             if (!file) return;
 
-            const isQueued = this.queuedSceneIds.has(scene.id);
+            const isQueued = this.queuedSceneIds.has(this.getQueueSceneKey(scene.id, endpointIdForResults));
             const isSelected = this.selectedScenes.has(scene.id) && !isQueued;
             const checkboxDisabled = isQueued;
             const checkboxTitle = isQueued ? 'Already in conversion queue' : isSelected ? 'Selected for conversion' : 'Click to select';
+            const stashSceneUrl = stashBaseUrl ? `${stashBaseUrl}/scenes/${scene.id}` : '#';
 
             const row = document.createElement('tr');
 
@@ -1003,7 +1290,7 @@ class StashShrinkApp {
                            title="${checkboxTitle}">
                 </td>
                 <td class="title-cell" title="${scene.title || 'Untitled'}">
-                    <a href="${this.config.stash_url}/scenes/${scene.id}" target="_blank">${scene.title || 'Untitled'}</a>
+                    <a href="${stashSceneUrl}" target="_blank">${scene.title || 'Untitled'}</a>
                 </td>
                 <td>${this.formatDuration(file.duration)}</td>
                 <td>${this.formatFileSize(file.size)}</td>
@@ -1049,6 +1336,11 @@ class StashShrinkApp {
                 if (value) searchParams[key] = value;
             }
 
+            const endpointId = this.searchEndpointId || this.config?.active_endpoint_id || this.endpointConfigs[0]?.id;
+            if (endpointId) {
+                searchParams.endpoint_id = endpointId;
+            }
+
             console.log('Searching with params:', searchParams);
 
             const response = await fetch('/api/search', {
@@ -1066,6 +1358,7 @@ class StashShrinkApp {
 
             const data = await response.json();
             this.currentResults = data.scenes;
+            this.currentResultsEndpointId = endpointId;
             this.currentPage = 1; // Reset to first page on new search
             this.selectedScenes.clear();
             this.syncPaginationControls();
@@ -1162,10 +1455,11 @@ class StashShrinkApp {
     selectAll() {
         // Get all scene IDs on current page (including queued ones for reference)
         const allCurrentPageSceneIds = this.getCurrentPageSceneIds();
+        const endpointId = this.currentResultsEndpointId || this.searchEndpointId;
 
         // Filter out queued scenes and only select non-queued ones
         const selectableSceneIds = allCurrentPageSceneIds.filter(id =>
-            !this.queuedSceneIds.has(id)
+            !this.queuedSceneIds.has(this.getQueueSceneKey(id, endpointId))
         );
 
         // Add all selectable scenes to selected set
@@ -1183,10 +1477,11 @@ class StashShrinkApp {
 
     selectInvert() {
         const currentPageSceneIds = this.getCurrentPageSceneIds();
+        const endpointId = this.currentResultsEndpointId || this.searchEndpointId;
 
         currentPageSceneIds.forEach(id => {
             // Skip queued scenes - they can't be selected
-            if (this.queuedSceneIds.has(id)) {
+            if (this.queuedSceneIds.has(this.getQueueSceneKey(id, endpointId))) {
                 return;
             }
 
@@ -1234,9 +1529,10 @@ class StashShrinkApp {
 
     updateSelectionControls() {
         const currentPageScenes = this.getCurrentPageSceneIds();
+        const endpointId = this.currentResultsEndpointId || this.searchEndpointId;
 
         // Count only selectable scenes (non-queued) that are selected
-        const selectableSceneIds = currentPageScenes.filter(id => !this.queuedSceneIds.has(id));
+        const selectableSceneIds = currentPageScenes.filter(id => !this.queuedSceneIds.has(this.getQueueSceneKey(id, endpointId)));
         const selectedCount = selectableSceneIds.filter(id => this.selectedScenes.has(id)).length;
         const allSelected = selectedCount === currentPageScenes.length;
         const allSelectableSelected = selectedCount === selectableSceneIds.length && selectableSceneIds.length > 0;
@@ -1262,7 +1558,10 @@ class StashShrinkApp {
         }
 
         // Get only selectable scenes (non-queued) that are selected
-        const selectableSelectedScenes = Array.from(this.selectedScenes).filter(id => !this.queuedSceneIds.has(id));
+        const endpointId = this.currentResultsEndpointId || this.searchEndpointId || this.config?.active_endpoint_id;
+        const selectableSelectedScenes = Array.from(this.selectedScenes).filter(
+            id => !this.queuedSceneIds.has(this.getQueueSceneKey(id, endpointId))
+        );
 
         if (selectableSelectedScenes.length === 0) {
             this.showToast('Please select at least one scene to convert. Note: Already queued scenes cannot be selected.', 'warning');
@@ -1276,7 +1575,7 @@ class StashShrinkApp {
 
         const maxAttempts = 5;
         const backoffTimes = [2000, 4000, 8000, 12000];
-        const sceneIds = Array.from(this.selectedScenes);
+        const sceneIds = Array.from(selectableSelectedScenes);
         let lastError = '';
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -1286,7 +1585,10 @@ class StashShrinkApp {
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(sceneIds)
+                    body: JSON.stringify({
+                        scene_ids: sceneIds,
+                        endpoint_id: endpointId
+                    })
                 });
 
                 if (response.ok) {
@@ -1786,7 +2088,8 @@ class StashShrinkApp {
 
         queue.forEach(task => {
             const sceneTitle = task.scene.title || 'Untitled';
-            const stashSceneUrl = this.config?.stash_url ? `${this.config.stash_url}/scenes/${task.scene.id}` : '#';
+            const endpoint = this.getEndpointById(task.endpoint_id) || this.endpointConfigs[0];
+            const stashSceneUrl = endpoint?.stash_url ? `${endpoint.stash_url}/scenes/${task.scene.id}` : '#';
 
             // Determine task status
             const isError = task.status === 'error';
