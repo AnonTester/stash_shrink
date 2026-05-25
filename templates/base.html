@@ -47,6 +47,8 @@
                                 <select id="endpoint-config-select" name="endpoint-config-select"></select>
                                 <small>Select which endpoint to edit.</small>
                             </div>
+                        </div>
+                        <div class="form-row endpoint-actions-row">
                             <div class="form-group endpoint-actions">
                                 <button type="button" id="add-endpoint" class="btn btn-secondary">Add Endpoint</button>
                                 <button type="button" id="remove-endpoint" class="btn btn-danger">Remove Endpoint</button>
@@ -107,6 +109,12 @@
                                     <span id="crf-value" style="min-width: 30px; font-weight: bold;">26</span>
                                 </div>
                                 <small>Lower values = better quality but larger files. Default is 26.</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="settings_min_filesize">Default Search Min File Size:</label>
+                                <input type="text" id="settings_min_filesize" name="settings_min_filesize" placeholder="Default MB, e.g., 500 or 0.5gb">
                             </div>
                         </div>
                     </div>

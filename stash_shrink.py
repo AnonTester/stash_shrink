@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.5.0"
+VERSION = "2.7.0"
 
 
 def compute_cache_buster() -> str:
@@ -45,9 +45,16 @@ GITHUB_REPO = "AnonTester/stash_shrink"
 GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}"
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60  # Once per day
 
-# Configuration
-CONFIG_FILE = "config.json"
-LOGS_DIR = "logs"
+# Configuration paths
+APP_DATA_DIR = Path(os.environ.get("STASH_SHRINK_DATA_DIR", ".")).resolve()
+LOGS_DIR = str(APP_DATA_DIR / "logs")
+CONFIG_FILE = str(APP_DATA_DIR / "config.json")
+QUEUE_STATE_FILE = str(APP_DATA_DIR / "conversion_queue.json")
+
+
+def ensure_runtime_paths():
+    """Create runtime directories."""
+    Path(LOGS_DIR).mkdir(parents=True, exist_ok=True)
 
 # Default configuration
 DEFAULT_ENDPOINT_ID = "default"
@@ -57,6 +64,7 @@ DEFAULT_VIDEO_SETTINGS = {
     "height": 720,
     "bitrate": "1000k",
     "framerate": 30,
+    "min_filesize": "",
     "buffer_size": "2000k",
     "container": "mp4",
     "crf": 26  # ADDED: Default CRF value
@@ -211,7 +219,6 @@ last_sse_data = None
 conversion_queue = []
 conversion_tasks = {}
 active_tasks = set()
-QUEUE_STATE_FILE = "conversion_queue.json"
 task_status = {}
 sse_clients = set()
 sse_shutdown_event = asyncio.Event()
@@ -233,8 +240,8 @@ update_status = {
 ffmpeg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 sse_update_queue = Queue()
 
-# Ensure logs directory exists
-Path(LOGS_DIR).mkdir(exist_ok=True)
+# Ensure runtime directories and files are ready
+ensure_runtime_paths()
 
 class EndpointConfig(BaseModel):
     id: str
@@ -257,6 +264,7 @@ class SearchParams(BaseModel):
     max_height: Optional[int] = None
     max_bitrate: Optional[str] = None
     max_framerate: Optional[float] = None
+    min_filesize: Optional[str] = None
     codec: Optional[str] = None
     path: Optional[str] = None
     endpoint_id: Optional[str] = None
@@ -466,7 +474,7 @@ def save_queue_state():
         for task in conversion_queue:
             task_data = {
                 "task_id": task.task_id,
-                "scene": task.scene.dict(),
+                "scene": task.scene.model_dump(),
                 "endpoint_id": task.endpoint_id,
                 "status": task.status,
                 "progress": task.progress,
@@ -930,7 +938,7 @@ async def convert_video_threaded(task: ConversionTask):
                 framerate_option = f"-r {video_settings['framerate']}"
 
         # Simple FFmpeg command
-        ffmpeg_cmd = f"""ffmpeg -y -hide_banner -stats_period 0.5 -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\,min({video_settings['width']}/iw\,{video_settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf {video_settings.get('crf', 26)} -c:a aac -b:v {video_settings['bitrate']} -maxrate {video_settings['bitrate']} -bufsize {video_settings['buffer_size']} -f {video_settings['container']} "{temp_output}" """
+        ffmpeg_cmd = f"""ffmpeg -y -hide_banner -stats_period 0.5 -i "{input_file}" -filter_complex "scale=ceil(iw*min(1\\,min({video_settings['width']}/iw\\,{video_settings['height']}/ih))/2)*2:-2" -c:v libx264 {framerate_option} -crf {video_settings.get('crf', 26)} -c:a aac -b:v {video_settings['bitrate']} -maxrate {video_settings['bitrate']} -bufsize {video_settings['buffer_size']} -f {video_settings['container']} "{temp_output}" """
 
         logger.debug(f"[Task {task.task_id}] FFmpeg command: {ffmpeg_cmd}")
 
@@ -1236,12 +1244,27 @@ def clear_sse_cache():
     global last_sse_data
     last_sse_data = None
 
+
+def render_template_response(request: Request, template_name: str, context: Dict[str, Any]):
+    """Render a template across Starlette versions with differing TemplateResponse signatures."""
+    context_with_request = {"request": request, **context}
+    try:
+        # Starlette newer signature: TemplateResponse(request=..., name=..., context=...)
+        return templates.TemplateResponse(
+            request=request,
+            name=template_name,
+            context=context_with_request,
+        )
+    except TypeError:
+        # Starlette older signature: TemplateResponse(name, context, ...)
+        return templates.TemplateResponse(template_name, context_with_request)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     config = get_config()
     show_settings = is_first_run()
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return render_template_response(request, "index.html", {
         "config": config,
         "show_settings": show_settings,
         "version": VERSION,
@@ -1294,7 +1317,7 @@ async def apply_update():
 
 @app.post("/api/config")
 async def update_config(settings: Settings):
-    config, _ = normalize_config(settings.dict())
+    config, _ = normalize_config(settings.model_dump())
     save_config(config)
     return {"status": "ok"}
 
@@ -1306,6 +1329,20 @@ async def search_scenes(search_params: SearchParams):
             endpoint = get_endpoint_config(search_params.endpoint_id, config)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+        max_bitrate_bps = None
+        if search_params.max_bitrate:
+            try:
+                max_bitrate_bps = convert_bitrate_to_bps(search_params.max_bitrate)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid max bitrate: {str(e)}")
+
+        min_filesize_bytes = None
+        if search_params.min_filesize:
+            try:
+                min_filesize_bytes = convert_filesize_to_bytes(search_params.min_filesize)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid min file size: {str(e)}")
 
         query = """
         query FindAllScenes {
@@ -1414,9 +1451,10 @@ async def search_scenes(search_params: SearchParams):
 
                     filtered_files = []
                     for file in files:
-                        include_file = False
+                        include_file = True
                         exceeds_limits = False
                         wrong_codec = False
+                        meets_min_filesize = True
                         path_matches = True
 
                         # Check width
@@ -1430,15 +1468,19 @@ async def search_scenes(search_params: SearchParams):
                                 exceeds_limits = True
 
                         # Check bitrate
-                        if search_params.max_bitrate and file.bit_rate:
-                            bitrate_value = convert_bitrate_to_bps(search_params.max_bitrate)
-                            if file.bit_rate > bitrate_value:
+                        if max_bitrate_bps is not None and file.bit_rate is not None:
+                            if file.bit_rate > max_bitrate_bps:
                                 exceeds_limits = True
 
                         # Check framerate
                         if search_params.max_framerate is not None and file.frame_rate is not None:
                             if file.frame_rate > search_params.max_framerate:
                                 exceeds_limits = True
+
+                        # Check minimum file size
+                        if min_filesize_bytes is not None:
+                            if file.size is None or file.size < min_filesize_bytes:
+                                meets_min_filesize = False
 
                         # Check codec
                         if search_params.codec and file.video_codec:
@@ -1454,29 +1496,26 @@ async def search_scenes(search_params: SearchParams):
                             if search_path_lower not in file_path_lower:
                                 path_matches = False
 
-                        has_technical_filters = any([
+                        has_conversion_filters = any([
                             search_params.max_width is not None,
                             search_params.max_height is not None,
-                            search_params.max_bitrate is not None,
+                            bool(search_params.max_bitrate),
                             search_params.max_framerate is not None,
-                            search_params.codec is not None
+                            bool(search_params.codec)
                         ])
 
-                        if not any([
-                            search_params.max_width is not None,
-                            search_params.max_height is not None,
-                            search_params.max_bitrate is not None,
-                            search_params.max_framerate is not None,
-                            search_params.codec is not None,
-                            search_params.path is not None
-                        ]):
+                        has_size_filter = min_filesize_bytes is not None
+                        has_path_filter = bool(search_params.path)
+
+                        if not any([has_conversion_filters, has_size_filter, has_path_filter]):
                             include_file = True
-                        elif has_technical_filters:
-                            if (exceeds_limits or wrong_codec) and path_matches:
-                                include_file = True
                         else:
-                            if path_matches:
-                                include_file = True
+                            if has_conversion_filters:
+                                include_file = exceeds_limits or wrong_codec
+                            if include_file and has_size_filter:
+                                include_file = meets_min_filesize
+                            if include_file and has_path_filter:
+                                include_file = path_matches
 
                         if include_file:
                             filtered_files.append(file)
@@ -1779,9 +1818,9 @@ async def conversion_status():
     global queue_paused
 
     return {
-        "queue": [task.dict() for task in conversion_queue],
+        "queue": [task.model_dump() for task in conversion_queue],
         "active": list(active_tasks),
-        "completed": [task.dict() for task in conversion_queue if task.status in ["completed", "error"]],
+        "completed": [task.model_dump() for task in conversion_queue if task.status in ["completed", "error"]],
         "paused": queue_paused,
         "update": update_status,
     }
@@ -2370,7 +2409,7 @@ async def sse_endpoint(request: Request):
                         "scene": {
                             "id": task.scene.id,
                             "title": task.scene.title,
-                            "files": [file.dict() for file in task.scene.files] if task.scene.files else []
+                            "files": [file.model_dump() for file in task.scene.files] if task.scene.files else []
                         },
                         "endpoint_id": task.endpoint_id,
                         "status": task.status,
@@ -2415,6 +2454,28 @@ def convert_bitrate_to_bps(bitrate_str: str) -> int:
     if bitrate_str and bitrate_str[-1].lower() in multipliers:
         return int(bitrate_str[:-1]) * multipliers[bitrate_str[-1].lower()]
     return int(bitrate_str) if bitrate_str else 0
+
+def convert_filesize_to_bytes(filesize_str: str) -> int:
+    if filesize_str is None:
+        return 0
+
+    match = re.match(r'^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]{0,2})\s*$', filesize_str)
+    if not match:
+        raise ValueError("expected format like 500, 500mb, 0.5gb, or 0.5 m")
+
+    size_value = float(match.group(1))
+    unit = (match.group(2) or 'mb').lower()
+    multipliers = {
+        'm': 1024 ** 2,
+        'mb': 1024 ** 2,
+        'g': 1024 ** 3,
+        'gb': 1024 ** 3
+    }
+
+    if unit not in multipliers:
+        raise ValueError("supported units are m, mb, g, gb")
+
+    return int(size_value * multipliers[unit])
 
 if __name__ == "__main__":
     uvicorn.run("stash_shrink:app", host="0.0.0.0", port=9899, reload=True)

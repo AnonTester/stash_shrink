@@ -124,6 +124,7 @@ class StashShrinkApp {
             height: 720,
             bitrate: '1000k',
             framerate: 30,
+            min_filesize: '',
             buffer_size: '2000k',
             container: 'mp4',
             crf: 26
@@ -282,6 +283,7 @@ class StashShrinkApp {
         form.height.value = videoSettings.height || '';
         form.bitrate.value = videoSettings.bitrate || '';
         form.framerate.value = videoSettings.framerate || '';
+        form.settings_min_filesize.value = videoSettings.min_filesize || '';
         form.buffer_size.value = videoSettings.buffer_size || '';
         form.container.value = videoSettings.container || '';
         form.crf.value = videoSettings.crf || 26;
@@ -307,6 +309,7 @@ class StashShrinkApp {
             height: parseInt(form.height.value) || 720,
             bitrate: form.bitrate.value || '1000k',
             framerate: parseFloat(form.framerate.value) || 30,
+            min_filesize: form.settings_min_filesize.value || '',
             buffer_size: form.buffer_size.value || '2000k',
             container: form.container.value || 'mp4',
             crf: parseInt(form.crf.value) || 26
@@ -981,6 +984,7 @@ class StashShrinkApp {
         document.getElementById('max_height').value = videoSettings.height || '';
         document.getElementById('max_bitrate').value = videoSettings.bitrate || '';
         document.getElementById('max_framerate').value = videoSettings.framerate || '';
+        document.getElementById('min_filesize').value = videoSettings.min_filesize || '';
     }
 
     async saveSettings(formData) {

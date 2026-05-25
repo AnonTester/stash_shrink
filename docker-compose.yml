@@ -1,0 +1,16 @@
+name: stash_shrink
+services:
+  stash_shrink:
+    container_name: stash_shrink
+    build:
+      context: .
+      args:
+        PYTHON_VERSION: "3.13"
+    restart: unless-stopped
+    ports:
+      - "9899:9899"
+    environment:
+      - STASH_SHRINK_DATA_DIR=/data
+    volumes:
+      - ./stash_shrink_data:/data
+      - /media/stash:/media/stash # mount single or multiple stash media directories

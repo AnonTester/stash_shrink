@@ -3,6 +3,7 @@ logs/*
 .git
 config.json
 conversion_queue.json
+docker-stash_shrink.yml
 *.swp
 .idea
 

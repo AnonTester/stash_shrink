@@ -37,7 +37,7 @@ cd stash_shrink
 
 ### 2. Install requirements
 
-You need **Python 3.9+**.
+You need **Python 3.12+** (3.12 and 3.13 supported).
 
 You will need to have ffmpeg installed:
 
@@ -46,12 +46,14 @@ sudo apt install ffmpeg
 ```
 
 
-It is strongly suggested to use a virtual environment for the requirements
+It is strongly suggested to use a virtual environment for the requirements.
 
-On debian/ubuntu systems install the python-venv package for your python version. For python 3.12:
+On Debian/Ubuntu systems install the `venv` package for your python version:
 
 ```bash
 sudo apt install python3.12-venv
+# or for Python 3.13:
+sudo apt install python3.13-venv
 ```
 
 Then create the virtual environment and activate it:
@@ -64,6 +66,10 @@ Install the required python packages:
 ```bash
 pip install -r requirements.txt
 ```
+
+Dependency notes:
+- Requirements were updated to modern ranges compatible with Python 3.12 and 3.13.
+- `pydantic` was updated to avoid older `pydantic-core` versions that may fail to build wheels on Python 3.13.
 
 To deactivate the virtual environment:
 ```bash
@@ -84,6 +90,11 @@ then start Stash Shrink
 python3 stash_shrink.py
 ```
 
+When run directly (non-Docker), runtime files are stored under the current directory:
+- `./config.json`
+- `./conversion_queue.json`
+- `./logs/`
+
 Then open your browser and go to:
 
 👉 **http://localhost:9899**
@@ -91,6 +102,42 @@ Then open your browser and go to:
 to exit/deactivate the virtual environment:
 ```bash
 deactivate
+```
+
+---
+
+## 🐳 Docker
+
+### Dockerfile
+
+A `Dockerfile` is included and installs:
+- Python (default image tag uses 3.13, overrideable via build arg)
+- ffmpeg
+- app dependencies from `requirements.txt`
+
+### Default Compose
+
+Use the default compose file:
+
+```bash
+docker compose up -d --build
+```
+
+This uses `docker-compose.yml` and mounts:
+- `./stash_shrink_data -> /data`
+
+Add bind mount for stash media directory or multiple directories.
+
+Inside that bind mount, the app uses:
+- `/data/config.json`
+- `/data/conversion_queue.json`
+- `/data/logs/`
+
+### Optional: build with Python 3.12 instead of 3.13
+
+```bash
+docker compose build --build-arg PYTHON_VERSION=3.12
+docker compose up -d
 ```
 
 ---
