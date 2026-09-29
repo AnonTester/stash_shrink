@@ -980,8 +980,15 @@ class StashShrinkApp {
         }
 
         const videoSettings = endpoint.video_settings;
-        document.getElementById('max_width').value = videoSettings.width || '';
-        document.getElementById('max_height').value = videoSettings.height || '';
+        // Search one resolution tier above the target (e.g. 720p -> 1080p) to find
+        // videos that need recoding, not ones already at the target size
+        const nextTier = (value, tiers) => {
+            if (!value) return '';
+            const higher = tiers.find(t => t > value);
+            return higher || value;
+        };
+        document.getElementById('max_width').value = nextTier(videoSettings.width, [854, 1280, 1920, 2560, 3840]);
+        document.getElementById('max_height').value = nextTier(videoSettings.height, [480, 720, 1080, 1440, 2160]);
         document.getElementById('max_bitrate').value = videoSettings.bitrate || '';
         document.getElementById('max_framerate').value = videoSettings.framerate || '';
         document.getElementById('min_filesize').value = videoSettings.min_filesize || '';

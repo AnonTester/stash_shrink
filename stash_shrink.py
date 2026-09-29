@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version
-VERSION = "2.7.0"
+VERSION = "2.7.1"
 
 
 def compute_cache_buster() -> str:

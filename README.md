@@ -22,6 +22,7 @@ Main features:
 - Real-time progress updates (ETA, percentage)
 - Cancel, resume, or retry failed conversions
 - Maximum concurrent conversion setting
+- "Use Video Settings" fills the search width/height with the next resolution tier above the target (720p → 1080p, 1080p → 4k), so results are videos that actually need recoding
 - Path mapping configuration for docker or when using on a different system
 
 ---
